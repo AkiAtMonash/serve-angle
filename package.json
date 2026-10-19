@@ -1,1 +1,1 @@
-{ "type": "module", "private": true, "scripts": { "test": "node --test test/guide.test.mjs test/serve.test.mjs" } }
+{ "type": "module", "private": true, "scripts": { "test": "node --test test/guide.test.mjs test/serve.test.mjs test/coach.test.mjs" } }

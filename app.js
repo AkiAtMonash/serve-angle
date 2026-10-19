@@ -1,4 +1,4 @@
-import { guide } from "./guide.js";
+import { createCoach, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, stanceFrame, warp } from "./serve.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
@@ -166,7 +166,7 @@ $("addFile").onchange = async e => {
 };
 
 // ---------- shoot ----------
-let shootLoop = 0, recorder = null, rec = null, okSince = 0, lastSaid = { text: "", at: 0 };
+let shootLoop = 0, recorder = null, rec = null, coach = createCoach();
 
 // MediaPipe's VIDEO mode tracks the person from the previous frame. A new camera (other size or
 // orientation) or a face filling the frame can leave it a zero-size region and every later call fails,
@@ -201,7 +201,7 @@ async function startShoot(r) {
   const cam = $("cam"); cam.srcObject = stream; await cam.play();
   try { wakeLock = await navigator.wakeLock?.request("screen"); } catch { /* screen may dim; not fatal */ }
   await landmarkers();
-  okSince = 0; lastSaid = { text: "", at: 0 };
+  coach = createCoach();
   const id = ++shootLoop;
   everyFrame(cam, () => id === shootLoop, shootFrame);
 }
@@ -247,16 +247,11 @@ function shootFrame() {
 
   drawLines(g, ref.lines || [], r);
   drawBones(g, toCanvas(ref.frames[ref.stance], r), COL.ref, 6, 0.55);
-  if (!pose) { setStatus("--", false, "全身が映るように立ってほしいのだ"); okSince = 0; return; }
-  drawBones(g, toCanvas(pose, r), COL.you);
-  const res = guide(pose, ref.frames[ref.stance], camAsp, refAsp, { front: $("facing").value === "user" });
-  const text = res.ok ? "OK、そのまま構えて" : res.instructions[0]?.say ?? `構えの形を合わせて（${res.score}）`;
-  setStatus(res.score, res.ok, text);
-  if (text !== lastSaid.text || now - lastSaid.at > 5000) { say(text); lastSaid = { text, at: now }; }
-  if (res.ok && $("auto").checked) {
-    okSince ||= now;
-    if (now - okSince > 2000) startRecording();
-  } else okSince = 0;
+  if (pose) drawBones(g, toCanvas(pose, r), COL.you);
+  const c = coachStep(coach, { t: now / 1000, pose, ref, aspect: camAsp, refAspect: refAsp, front: $("facing").value === "user" });
+  setStatus(c.score ?? "--", c.display.startsWith("OK"), c.display);
+  if (c.say) say(c.say);
+  if (c.ok && $("auto").checked) startRecording();
 }
 
 function setStatus(score, ok, text) {
