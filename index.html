@@ -2,12 +2,100 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111111">
 <title>サーブ撮影</title>
-<style>body{margin:0;padding:16px;background:#111;color:#eee;font:16px/1.6 system-ui,sans-serif}a{color:#4af}</style>
+<style>
+  :root { color-scheme: dark; --bg:#111; --panel:#1c1c1c; --fg:#f2f2f2; --mut:#9a9a9a; --acc:#3fa9ff; --ok:#4cd964; --you:#ffd60a; --ref:#5ce1e6; --line:#ff453a; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+  button, select, input[type=range] { font:inherit; }
+  button { border:0; border-radius:12px; padding:12px 16px; background:var(--panel); color:var(--fg); }
+  button.primary { background:var(--acc); color:#000; font-weight:600; }
+  .screen { display:none; height:100%; }
+  .screen.on { display:flex; flex-direction:column; }
+  /* home */
+  #home { padding:16px; gap:12px; overflow:auto; }
+  #home h1 { margin:0; font-size:22px; }
+  #home p { margin:0; color:var(--mut); font-size:14px; }
+  #refs { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
+  .card { background:var(--panel); border-radius:12px; padding:8px; text-align:left; display:flex; flex-direction:column; gap:4px; }
+  .card canvas { width:100%; aspect-ratio:16/9; background:#000; border-radius:8px; }
+  .card b { font-size:15px; } .card small { color:var(--mut); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #addStatus { color:var(--mut); font-size:14px; }
+  /* camera + review */
+  .stage { position:relative; flex:1; min-height:0; background:#000; }
+  .stage video, .stage canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .hud { position:absolute; left:0; right:0; padding:10px 12px; display:flex; gap:8px; align-items:center; pointer-events:none; }
+  .hud > * { pointer-events:auto; }
+  .hud.top { top:0; background:linear-gradient(#000c, #0000); }
+  .hud.bottom { bottom:0; background:linear-gradient(#0000, #000c); justify-content:center; padding-bottom:max(12px, env(safe-area-inset-bottom)); }
+  .badge { font-weight:700; font-size:20px; min-width:64px; text-align:center; border-radius:10px; padding:4px 8px; background:#000a; }
+  .badge.ok { background:var(--ok); color:#000; }
+  #say { flex:1; font-size:18px; font-weight:600; text-shadow:0 1px 3px #000; }
+  #rec { width:72px; height:72px; border-radius:50%; background:#fff; border:6px solid #fff8; padding:0; }
+  #rec.on { background:var(--line); }
+  .legend { font-size:13px; color:var(--mut); }
+  .legend i { font-style:normal; } .you { color:var(--you); } .ref { color:var(--ref); } .ln { color:var(--line); }
+  #warn { position:absolute; inset:auto 12px 100px 12px; text-align:center; background:#000c; border-radius:10px; padding:8px; display:none; }
+</style>
 </head>
 <body>
-<h1>サーブ撮影（作成中）</h1>
-<p><a href="check.html">実機チェック</a></p>
+
+<section id="home" class="screen on">
+  <h1>サーブ撮影</h1>
+  <p>お手本の角度を選ぶと、カメラの映像にお手本のコートの線（赤）と構え（水色）が重なるのだ。スマホは横向きで三脚に固定してほしいのだ。</p>
+  <div id="refs"></div>
+  <div class="row">
+    <label class="row"><button id="addBtn">お手本を動画から追加</button><input id="addFile" type="file" accept="video/*" hidden></label>
+    <span id="addStatus"></span>
+  </div>
+  <div class="row legend">
+    <label>骨格推定 <select id="model"><option value="lite">速い（lite）</option><option value="full">正確（full）</option></select></label>
+    <label><input id="voice" type="checkbox" checked> 音声で指示</label>
+    <label><input id="auto" type="checkbox" checked> 合ったら自動で録画</label>
+  </div>
+  <p class="legend">お手本はYouTube「【ソフトテニス】力を抜いた理想のフォーム！爆音サーブをスローモーション徹底分析！」から骨格の座標だけを取り出したものなのだ。映像は入っていないのだ。</p>
+</section>
+
+<section id="shoot" class="screen">
+  <div class="stage">
+    <video id="cam" playsinline muted></video>
+    <canvas id="camOv"></canvas>
+    <div class="hud top">
+      <button id="shootBack">←</button>
+      <span id="score" class="badge">--</span>
+      <span id="say">起動中…</span>
+    </div>
+    <div id="warn"></div>
+    <div class="hud bottom">
+      <span class="legend"><i class="you">■あなた</i> <i class="ref">■お手本</i> <i class="ln">■コート線</i></span>
+      <button id="rec" aria-label="録画"></button>
+      <span id="recInfo" class="legend"></span>
+    </div>
+  </div>
+</section>
+
+<section id="review" class="screen">
+  <div class="stage">
+    <video id="rv" playsinline muted></video>
+    <canvas id="rvOv"></canvas>
+    <div class="hud top">
+      <button id="reviewBack">←</button>
+      <span id="rvInfo" class="legend"></span>
+    </div>
+    <div class="hud bottom row">
+      <button id="play" class="primary">再生</button>
+      <select id="rate"><option value="0.25">1/4倍</option><option value="0.125">1/8倍</option><option value="0.5">1/2倍</option><option value="1">等倍</option></select>
+      <select id="view"><option value="overlay">重ねる</option><option value="side">並べる</option></select>
+      <label class="legend">ずらす <input id="offset" type="range" min="-1" max="1" step="0.02" value="0"></label>
+      <button id="save">保存</button>
+      <button id="again">撮り直す</button>
+    </div>
+  </div>
+</section>
+
+<script type="module" src="app.js"></script>
 </body>
 </html>
