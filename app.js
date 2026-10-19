@@ -168,12 +168,28 @@ $("addFile").onchange = async e => {
 // ---------- shoot ----------
 let shootLoop = 0, recorder = null, rec = null, okSince = 0, lastSaid = { text: "", at: 0 };
 
+// MediaPipe's VIDEO mode tracks the person from the previous frame. A new camera (other size or
+// orientation) or a face filling the frame can leave it a zero-size region and every later call fails,
+// so start each camera with a fresh landmarker and rebuild it if a frame throws.
+let rebuilding = false;
+function resetLive() { try { live?.close(); } catch { /* already broken */ } live = null; }
+function liveDetect(src, ts) {
+  if (!live) return null;
+  try { return detect(live, src, ts); }
+  catch (e) {
+    if (!rebuilding) { rebuilding = true; resetLive(); landmarkers().finally(() => { rebuilding = false; }); }
+    return null;
+  }
+}
+
 async function startShoot(r) {
   ref = r; show("shoot");
+  resetLive();
   $("say").textContent = "カメラと骨格推定を準備中…";
   try {
-    // ?src=<video url> feeds a video file instead of the camera (for testing on a PC)
-    const src = new URLSearchParams(location.search).get("src");
+    // ?src=<video url> feeds a video file instead of the camera (for testing on a PC); ?srcUser= for the front camera
+    const q = new URLSearchParams(location.search);
+    const src = ($("facing").value === "user" && q.get("srcUser")) || q.get("src");
     if (src && !stream) {
       const fake = document.createElement("video"); fake.src = src; fake.muted = true; fake.loop = true; fake.playsInline = true;
       await fake.play(); stream = fake.captureStream();
@@ -196,7 +212,8 @@ function everyFrame(video, alive, fn) {
   let last = -1;
   const step = () => {
     if (!alive()) return;
-    if (video.currentTime !== last) { last = video.currentTime; fn(); }
+    try { if (video.currentTime !== last) { last = video.currentTime; fn(); } }
+    catch (e) { showError(e); }                                   // keep the loop alive whatever happens
     setTimeout(step, 8);
   };
   step();
@@ -204,7 +221,8 @@ function everyFrame(video, alive, fn) {
 
 function shootFrame() {
   const cam = $("cam"), now = performance.now();
-  const pose = detect(live, cam, now);
+  if (!live) { setStatus("--", false, "骨格推定を準備中…"); return; }
+  const pose = liveDetect(cam, now);
   const vw = cam.videoWidth, vh = cam.videoHeight, r = rectOf(cam, vw, vh);
   const g = fitCanvas($("camOv"));
   const camAsp = vw / vh, refAsp = ref.width / ref.height;
