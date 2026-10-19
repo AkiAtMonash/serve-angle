@@ -7,20 +7,30 @@ const NOSE = 0, LSH = 11, RSH = 12, LEL = 13, REL = 14, LWR = 15, RWR = 16, LHI 
 const PAIRS = [[1, 4], [2, 5], [3, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24], [25, 26], [27, 28], [29, 30], [31, 32]];
 const SIDE = { L: [LSH, LEL, LWR], R: [RSH, REL, RWR] };
 
-// Undo frames where the model swapped left/right: keep whichever labelling is closer to the previous frame.
-export function fixSwaps(frames, aspect = 1) {
+// Undo short left/right label swaps (same rule as fix_swaps in serve_analyze.py): track which labelling
+// fits the previous raw frame, and flip back only runs of <= maxRun frames bounded on both sides.
+// Long runs are left alone: during a fast swing "closest to the previous frame" is not reliable.
+export function fixSwaps(frames, aspect = 1, maxRun = 5) {
   const perm = [...Array(33).keys()];
   for (const [a, b] of PAIRS) [perm[a], perm[b]] = [b, a];
   const dist = (p, q, map) => p.reduce((s, _, i) => s + Math.hypot((p[map[i]][0] - q[i][0]) * aspect, p[map[i]][1] - q[i][1]), 0);
   const ident = [...Array(33).keys()];
-  let prev = null;
-  return frames.map(p => {
-    if (!p) return p;
-    let out = p;
-    if (prev && dist(p, prev, perm) < dist(p, prev, ident)) out = perm.map(i => p[i]);
-    prev = out;
-    return out;
+  const idx = frames.flatMap((p, i) => (p ? [i] : []));
+  const state = [];
+  let cur = 0;
+  idx.forEach((i, k) => {
+    if (k && dist(frames[i], frames[idx[k - 1]], perm) < dist(frames[i], frames[idx[k - 1]], ident)) cur ^= 1;
+    state.push(cur);
   });
+  const out = frames.slice();
+  let start = 0;
+  const runs = [];
+  for (let k = 1; k <= idx.length; k++) if (k === idx.length || state[k] !== state[start]) { runs.push([start, k - 1]); start = k; }
+  runs.forEach(([s0, s1], r) => {
+    if (r > 0 && r < runs.length - 1 && s1 - s0 + 1 <= maxRun)
+      for (let k = s0; k <= s1; k++) out[idx[k]] = perm.map(j => frames[idx[k]][j]);
+  });
+  return out;
 }
 
 const torso = p => Math.hypot((p[LSH][0] + p[RSH][0]) / 2 - (p[LHI][0] + p[RHI][0]) / 2, (p[LSH][1] + p[RSH][1]) / 2 - (p[LHI][1] + p[RHI][1]) / 2);

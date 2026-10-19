@@ -46,16 +46,18 @@ function fitCanvas(cv) {
   return g;
 }
 
-// pts: points already in canvas pixels
+// pts: points in canvas pixels, [x, y, visibility]. Joints the model could not see (visibility < 0.5,
+// e.g. the racket-arm elbow behind the head during the racket drop) are guesses: drawn dashed.
 function drawBones(g, pts, color, width = 4, alpha = 1) {
   g.save(); g.globalAlpha = alpha; g.strokeStyle = color; g.lineWidth = width; g.lineCap = "round";
   for (const [a, b] of BONES) {
     if (!pts[a] || !pts[b]) continue;
+    g.setLineDash((pts[a][2] ?? 1) < 0.5 || (pts[b][2] ?? 1) < 0.5 ? [width * 1.5, width * 2] : []);
     g.beginPath(); g.moveTo(pts[a][0], pts[a][1]); g.lineTo(pts[b][0], pts[b][1]); g.stroke();
   }
   g.restore();
 }
-const toCanvas = (pose, r) => pose.map(p => [r.x + p[0] * r.w, r.y + p[1] * r.h]);
+const toCanvas = (pose, r) => pose.map(p => [r.x + p[0] * r.w, r.y + p[1] * r.h, p[3]]);
 
 function drawLines(g, lines, r, alpha = 0.8) {
   g.save(); g.globalAlpha = alpha; g.strokeStyle = COL.line; g.lineWidth = 3;
@@ -337,7 +339,7 @@ function drawReview() {
     const hip = P => [(P[23][0] + P[24][0]) / 2, (P[23][1] + P[24][1]) / 2];
     const tor = P => Math.hypot((P[11][0] + P[12][0]) / 2 - hip(P)[0], (P[11][1] + P[12][1]) / 2 - hip(P)[1]);
     const k = tor(Y) / tor(R), hy = hip(Y), hr = hip(R);
-    drawBones(g, R.map(q => [r.x + hy[0] + (q[0] - hr[0]) * k, r.y + hy[1] + (q[1] - hr[1]) * k]), COL.ref, 4, 0.9);
+    drawBones(g, R.map((q, i) => [r.x + hy[0] + (q[0] - hr[0]) * k, r.y + hy[1] + (q[1] - hr[1]) * k, rp[i][3]]), COL.ref, 4, 0.9);
   } else {
     // side by side: the pro's skeleton in a panel on the right
     const W = r.w * 0.38, H = r.h * 0.9, bx = r.x + r.w - W - 8, by = r.y + (r.h - H) / 2;
@@ -345,7 +347,7 @@ function drawReview() {
     const xs = rp.map(p => p[0] * ref.width), ys = rp.map(p => p[1] * ref.height);
     const all = ref.frames.flat(), minY = Math.min(...all.map(p => p[1])) * ref.height, maxY = Math.max(...all.map(p => p[1])) * ref.height;
     const k = (H * 0.9) / (maxY - minY), cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-    drawBones(g, xs.map((x, i) => [bx + W / 2 + (x - cx) * k, by + H * 0.05 + (ys[i] - minY) * k]), COL.ref, 4);
+    drawBones(g, xs.map((x, i) => [bx + W / 2 + (x - cx) * k, by + H * 0.05 + (ys[i] - minY) * k, rp[i][3]]), COL.ref, 4);
     g.fillStyle = COL.ref; g.font = "14px system-ui"; g.fillText(`お手本：${ref.label}`, bx + 8, by + 20);
   }
 }
