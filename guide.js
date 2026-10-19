@@ -44,13 +44,17 @@ export function score(you, ref, aspectYou, aspectRef) {
 }
 
 // Instructions for moving the camera, most important first. ok = shape, size and framing all match.
-export function guide(you, ref, aspectYou, aspectRef) {
+// front: the selfie camera faces you, so "turn the camera to its left" is "turn the phone to your right".
+export function guide(you, ref, aspectYou, aspectRef, { front = false } = {}) {
   const f = features(you), g = features(ref);
   const out = [];
   const size = f.height / g.height;
   if (Math.abs(size - 1) > TOL.size) out.push({ kind: "size", value: size, say: size < 1 ? "カメラを近づけて" : "カメラを離して" });
   const pan = f.cx - g.cx;
-  if (Math.abs(pan) > TOL.pan) out.push({ kind: "pan", value: pan, say: `カメラを少し${pan < 0 ? "左" : "右"}に向けて` });
+  if (Math.abs(pan) > TOL.pan) {
+    const camLeft = pan < 0;                                         // you sit too far left in the raw frame
+    out.push({ kind: "pan", value: pan, say: front ? `スマホを、あなたから見て少し${camLeft ? "右" : "左"}に向けて` : `カメラを少し${camLeft ? "左" : "右"}に向けて` });
+  }
   const s = score(you, ref, aspectYou, aspectRef);
   return { instructions: out, score: s, ok: !out.length && s >= TOL.okScore, size, pan };
 }

@@ -27,6 +27,9 @@ for (const r of all) {
     assert.equal(guide(shift(stance(r), -0.15), stance(r), asp(r), asp(r)).instructions.find(i => i.kind === "pan")?.say, "カメラを少し左に向けて");
     assert.equal(guide(shift(stance(r), 0.15), stance(r), asp(r), asp(r)).instructions.find(i => i.kind === "pan")?.say, "カメラを少し右に向けて");
   });
+  test(`${r.id}: selfie camera flips the left/right wording to the player's view`, () => {
+    assert.equal(guide(shift(stance(r), -0.15), stance(r), asp(r), asp(r), { front: true }).instructions.find(i => i.kind === "pan")?.say, "スマホを、あなたから見て少し右に向けて");
+  });
   test(`${r.id}: score ignores size and position`, () => {
     assert.equal(score(shift(scale(stance(r), 0.7), 0.1), stance(r), asp(r), asp(r)), 100);
   });

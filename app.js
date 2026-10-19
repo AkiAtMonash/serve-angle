@@ -179,7 +179,7 @@ async function startShoot(r) {
       await fake.play(); stream = fake.captureStream();
     }
     stream ??= await navigator.mediaDevices.getUserMedia({
-      audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
+      audio: false, video: { facingMode: { ideal: $("facing").value }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
     });
   } catch (err) { $("say").textContent = `カメラを使えなかったのだ（${err.name}）`; return; }
   const cam = $("cam"); cam.srcObject = stream; await cam.play();
@@ -231,7 +231,7 @@ function shootFrame() {
   drawBones(g, toCanvas(ref.frames[ref.stance], r), COL.ref, 6, 0.55);
   if (!pose) { setStatus("--", false, "全身が映るように立ってほしいのだ"); okSince = 0; return; }
   drawBones(g, toCanvas(pose, r), COL.you);
-  const res = guide(pose, ref.frames[ref.stance], camAsp, refAsp);
+  const res = guide(pose, ref.frames[ref.stance], camAsp, refAsp, { front: $("facing").value === "user" });
   const text = res.ok ? "OK、そのまま構えて" : res.instructions[0]?.say ?? `構えの形を合わせて（${res.score}）`;
   setStatus(res.score, res.ok, text);
   if (text !== lastSaid.text || now - lastSaid.at > 5000) { say(text); lastSaid = { text, at: now }; }
@@ -269,6 +269,12 @@ function stopRecording(discard = false) {
 }
 
 $("rec").onclick = () => (rec ? stopRecording() : startRecording());
+$("flip").onclick = () => {
+  if (rec) return;
+  $("facing").value = $("facing").value === "user" ? "environment" : "user";
+  store.set("facing", $("facing").value);
+  stopCamera(); startShoot(ref);
+};
 $("shootBack").onclick = () => { shootLoop++; stopRecording(true); stopCamera(); show("home"); };
 
 function stopCamera() {
@@ -349,6 +355,8 @@ $("reviewBack").onclick = () => { rvLoop++; URL.revokeObjectURL(rv.url); stopCam
 // ---------- settings + start ----------
 for (const id of ["voice", "auto"]) { $(id).checked = store.get(id, true); $(id).onchange = () => store.set(id, $(id).checked); }
 $("model").value = store.get("model", "lite");
+$("facing").value = store.get("facing", "environment");
+$("facing").onchange = () => store.set("facing", $("facing").value);
 $("model").onchange = () => { store.set("model", $("model").value); live?.close(); still?.close(); live = still = null; };
 
 const builtIn = await fetch("refs.json").then(r => r.json()).then(d => d.refs);

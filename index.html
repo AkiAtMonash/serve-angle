@@ -45,13 +45,14 @@
 
 <section id="home" class="screen on">
   <h1>サーブ撮影</h1>
-  <p>お手本の角度を選ぶと、カメラの映像にお手本のコートの線（赤）と構え（水色）が重なるのだ。スマホは横向きで三脚に固定してほしいのだ。</p>
+  <p>お手本の角度を選ぶと、カメラの映像にお手本のコートの線（赤）と構え（水色）が重なるのだ。スマホは横向きで三脚に固定してほしいのだ。内カメなら、構えた位置から画面を見ながら合わせられるのだ（映像は鏡にせず、録画と同じ向きで出すのだ）。</p>
   <div id="refs"></div>
   <div class="row">
     <label class="row"><button id="addBtn">お手本を動画から追加</button><input id="addFile" type="file" accept="video/*" hidden></label>
     <span id="addStatus"></span>
   </div>
   <div class="row legend">
+    <label>カメラ <select id="facing"><option value="environment">背面</option><option value="user">内カメ</option></select></label>
     <label>骨格推定 <select id="model"><option value="lite">速い（lite）</option><option value="full">正確（full）</option></select></label>
     <label><input id="voice" type="checkbox" checked> 音声で指示</label>
     <label><input id="auto" type="checkbox" checked> 合ったら自動で録画</label>
@@ -65,6 +66,7 @@
     <canvas id="camOv"></canvas>
     <div class="hud top">
       <button id="shootBack">←</button>
+      <button id="flip" aria-label="カメラ切り替え">⇄</button>
       <span id="score" class="badge">--</span>
       <span id="say">起動中…</span>
     </div>
