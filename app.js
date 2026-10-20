@@ -354,6 +354,27 @@ function drawReview() {
 
 $("play").onclick = () => { const v = $("rv"); v.paused ? v.play() : v.pause(); $("play").textContent = v.paused ? "再生" : "一時停止"; };
 $("rv").onended = () => { $("play").textContent = "再生"; };
+
+// Frame stepping: one skeleton frame per tap, and holding the button keeps stepping fast.
+function stepFrame(dir) {
+  const v = $("rv"), d = rv.times.slice(1).map((t, i) => t - rv.times[i]).sort((a, b) => a - b);
+  const dt = d[d.length >> 1] || 1 / 30;                       // median gap between skeleton frames
+  v.pause(); $("play").textContent = "再生";
+  const end = Number.isFinite(v.duration) ? v.duration : rv.times.at(-1) ?? 0;   // MediaRecorder webm has no duration
+  v.currentTime = Math.max(0, Math.min(end, v.currentTime + dir * dt));
+}
+for (const [id, dir] of [["back", -1], ["fwd", 1]]) {
+  let timer = 0;
+  const b = $(id);
+  b.onpointerdown = e => {
+    b.setPointerCapture(e.pointerId);
+    stepFrame(dir);
+    const go = wait => { timer = setTimeout(() => { stepFrame(dir); go(60); }, wait); };
+    go(350);
+  };
+  b.onpointerup = b.onpointercancel = () => clearTimeout(timer);
+  b.oncontextmenu = e => e.preventDefault();                   // long press must not open a menu on Android
+}
 $("rate").onchange = () => { $("rv").playbackRate = +$("rate").value; };
 $("view").onchange = $("offset").oninput = () => drawReview();
 $("save").onclick = () => {
