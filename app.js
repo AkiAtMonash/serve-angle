@@ -377,12 +377,19 @@ for (const [id, dir] of [["back", -1], ["fwd", 1]]) {
 }
 $("rate").onchange = () => { $("rv").playbackRate = +$("rate").value; };
 $("view").onchange = $("offset").oninput = () => drawReview();
-$("save").onclick = () => {
+$("save").onclick = async () => {
   const ext = rv.mime.includes("mp4") ? "mp4" : "webm";
   const d = new Date(), pad = n => String(n).padStart(2, "0");
+  const name = `serve_${ref.id}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${ext}`;
+  // Open the share sheet so the video can go to Google Drive and be seen from the PC;
+  // fall back to a plain download where sharing files is not supported.
+  const file = new File([rv.blob], name, { type: rv.mime.split(";")[0] });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
   const a = document.createElement("a");
-  a.href = rv.url;
-  a.download = `serve_${ref.id}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${ext}`;
+  a.href = rv.url; a.download = name;
   a.click();
 };
 $("again").onclick = () => { rvLoop++; URL.revokeObjectURL(rv.url); startShoot(ref); };
