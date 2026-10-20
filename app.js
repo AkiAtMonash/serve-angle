@@ -233,7 +233,13 @@ function shootFrame() {
   if (aspOff) $("warn").textContent = camAsp < 1 && refAsp > 1 ? "スマホを横向きにしてほしいのだ" : "お手本と画面の縦横比が違うので、重ね方がずれるのだ";
 
   if (rec) {                                   // recording: just keep the skeleton for the review
-    if (pose) { rec.poses.push(pose); rec.times.push((now - rec.t0) / 1000); }
+    if (pose) {
+      rec.poses.push(pose); rec.times.push((now - rec.t0) / 1000);
+      // Keep a small copy of this exact frame so the review can step frames without seeking the video.
+      // ponytail: 640 px long side, ~0.7 GB at 30 fps x 25 s; go to 480 px if the phone runs out of memory
+      const k = Math.min(1, 640 / Math.max(vw, vh));
+      rec.frames.push(createImageBitmap(cam, { resizeWidth: Math.round(vw * k), resizeHeight: Math.round(vh * k), resizeQuality: "low" }).catch(() => null));
+    }
     if (pose) drawBones(g, toCanvas(pose, r), COL.you);
     const t = (now - rec.t0) / 1000;
     $("recInfo").textContent = `録画中 ${t.toFixed(1)}秒`;
@@ -265,9 +271,9 @@ function startRecording() {
   const types = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
   const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || "";
   recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-  const r = { t0: performance.now(), poses: [], times: [], lastCheck: -1, mime: recorder.mimeType || mime, chunks: [], discard: false };
+  const r = { t0: performance.now(), poses: [], times: [], frames: [], lastCheck: -1, mime: recorder.mimeType || mime, chunks: [], discard: false };
   recorder.ondataavailable = e => e.data.size && r.chunks.push(e.data);
-  recorder.onstop = () => { if (!r.discard) openReview(new Blob(r.chunks, { type: r.mime }), r); };
+  recorder.onstop = () => r.discard ? closeFrames(r.frames) : openReview(new Blob(r.chunks, { type: r.mime }), r);
   rec = r;
   recorder.start();
   $("rec").classList.add("on");
@@ -299,15 +305,19 @@ function stopCamera() {
 
 // ---------- review ----------
 let rv = null, rvLoop = 0;
+let stepIdx = -1;   // >= 0: the review shows cached frame stepIdx instead of the video
 
-function openReview(blob, data) {
+const closeFrames = frames => Promise.all(frames).then(bs => bs.forEach(b => b?.close()));
+
+async function openReview(blob, data) {
   shootLoop++;
   const url = URL.createObjectURL(blob);
   const poses = fixSwaps(data.poses, $("cam").videoWidth / $("cam").videoHeight);
   const fps = poses.length / Math.max(0.1, data.times.at(-1) ?? 1);
   const sv = findServes(poses, fps).at(-1);
-  rv = { url, blob, poses, times: data.times, mime: data.mime,
+  rv = { url, blob, poses, times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
     you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] } : null };
+  stepIdx = -1;
   $("rvInfo").textContent = sv ? "トスが一番高い瞬間と打点でお手本に合わせてあるのだ" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
   show("review");
   const v = $("rv"); v.src = url; v.playbackRate = +$("rate").value;
@@ -315,19 +325,22 @@ function openReview(blob, data) {
   v.onloadeddata = () => { drawReview(); everyFrame(v, () => id === rvLoop, drawReview); };
 }
 
-function nearestPose(t) {
-  const { times, poses } = rv;
+function nearestIndex(t) {
+  const { times } = rv;
   let lo = 0, hi = times.length - 1;
   while (lo < hi) { const m = (lo + hi) >> 1; times[m] < t ? (lo = m + 1) : (hi = m); }
-  return poses[lo];
+  return lo;
 }
 
 function drawReview() {
   const v = $("rv"), g = fitCanvas($("rvOv"));
   if (!v.videoWidth) return;
   const r = rectOf(v, v.videoWidth, v.videoHeight);
-  const t = v.currentTime;
-  const you = nearestPose(t);
+  const still = stepIdx >= 0 ? rv.frames[stepIdx] : null;
+  if (still) g.drawImage(still, r.x, r.y, r.w, r.h);
+  const i = still ? stepIdx : nearestIndex(v.currentTime);
+  const t = still ? rv.times[i] : v.currentTime;
+  const you = rv.poses[i];
   if (you) drawBones(g, toCanvas(you, r), COL.you);
   if (!rv.you) return;
   const fi = warp(t + +$("offset").value, rv.you, ref);
@@ -352,16 +365,23 @@ function drawReview() {
   }
 }
 
-$("play").onclick = () => { const v = $("rv"); v.paused ? v.play() : v.pause(); $("play").textContent = v.paused ? "再生" : "一時停止"; };
+$("play").onclick = () => {
+  const v = $("rv");
+  if (stepIdx >= 0) { v.currentTime = rv.times[stepIdx]; stepIdx = -1; }   // resume the video where stepping stopped
+  v.paused ? v.play() : v.pause(); $("play").textContent = v.paused ? "再生" : "一時停止";
+};
 $("rv").onended = () => { $("play").textContent = "再生"; };
 
-// Frame stepping: one skeleton frame per tap, and holding the button keeps stepping fast.
+// Frame stepping: draws the frames cached while recording, so there is no video seek
+// (a seek decodes from the last keyframe, up to ~100 frames back in Chrome's recordings).
+// One tap = one skeleton frame; holding the button keeps stepping.
 function stepFrame(dir) {
-  const v = $("rv"), d = rv.times.slice(1).map((t, i) => t - rv.times[i]).sort((a, b) => a - b);
-  const dt = d[d.length >> 1] || 1 / 30;                       // median gap between skeleton frames
+  const v = $("rv");
+  if (!rv.frames.length) return;
   v.pause(); $("play").textContent = "再生";
-  const end = Number.isFinite(v.duration) ? v.duration : rv.times.at(-1) ?? 0;   // MediaRecorder webm has no duration
-  v.currentTime = Math.max(0, Math.min(end, v.currentTime + dir * dt));
+  if (stepIdx < 0) stepIdx = nearestIndex(v.currentTime);
+  stepIdx = Math.max(0, Math.min(rv.frames.length - 1, stepIdx + dir));
+  drawReview();
 }
 for (const [id, dir] of [["back", -1], ["fwd", 1]]) {
   let timer = 0;
@@ -392,8 +412,9 @@ $("save").onclick = async () => {
   a.href = rv.url; a.download = name;
   a.click();
 };
-$("again").onclick = () => { rvLoop++; URL.revokeObjectURL(rv.url); startShoot(ref); };
-$("reviewBack").onclick = () => { rvLoop++; URL.revokeObjectURL(rv.url); stopCamera(); show("home"); };
+const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; };
+$("again").onclick = () => { closeReview(); startShoot(ref); };
+$("reviewBack").onclick = () => { closeReview(); stopCamera(); show("home"); };
 
 // ---------- settings + start ----------
 for (const id of ["voice", "auto"]) { $(id).checked = store.get(id, true); $(id).onchange = () => store.set(id, $(id).checked); }
