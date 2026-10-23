@@ -16,7 +16,7 @@ export const COACH = {
   speakPan: 0.07,
 };
 
-const LSH = 11, RSH = 12, LHI = 23, RHI = 24, NOSE = 0, LAN = 27, RAN = 28;
+const LSH = 11, RSH = 12, LWR = 15, RWR = 16, LHI = 23, RHI = 24, NOSE = 0, LAN = 27, RAN = 28;
 const median = a => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 
 export function createCoach() {
@@ -76,4 +76,35 @@ export function step(st, { t, pose, ref, aspect, refAspect, front = false }) {
     say = text; st.spokeThisStill = true; st.lastSay = text; st.lastAt = t;
   }
   return { display: text, say, ok: false, score };
+}
+
+// Start recording with both hands up above the head, held for a second ("banzai"; waving while up is fine).
+// Waving one hand side to side was tried first and failed in the field (2026-10-23): a racket wave is
+// mostly the wrist turning, so the wrist hardly moves sideways. Both hands this high this long never
+// happens in a serve: at most 0.53 s in the 26 serves of 2026-10-16, 1.4 s in the 2026-10-23 test.
+export const HANDS_UP = {
+  above: 0.1,      // both wrists at least this many torso lengths above the nose
+  holdSec: 1.0,    // for this long
+  gapSec: 0.2,     // a dropout this short doesn't break the hold
+  vis: 0.5,        // wrists seen less surely than this don't count
+};
+
+export function createHandsUp() { return { since: null, last: -Infinity, fired: false }; }
+
+// One frame. Returns true once per raise, on the frame the hold completes.
+export function handsUpStep(st, t, pose, aspect = 1) {
+  let up = false;
+  if (pose) {
+    const tor = Math.hypot(((pose[LSH][0] + pose[RSH][0]) / 2 - (pose[LHI][0] + pose[RHI][0]) / 2) * aspect,
+      (pose[LSH][1] + pose[RSH][1]) / 2 - (pose[LHI][1] + pose[RHI][1]) / 2);
+    up = [LWR, RWR].every(w => pose[w][3] > HANDS_UP.vis && pose[w][1] < pose[NOSE][1] - HANDS_UP.above * tor);
+  }
+  if (!up) {
+    if (t - st.last > HANDS_UP.gapSec) { st.since = null; st.fired = false; }
+    return false;
+  }
+  st.since ??= t; st.last = t;
+  if (st.fired || t - st.since < HANDS_UP.holdSec) return false;
+  st.fired = true;
+  return true;
 }

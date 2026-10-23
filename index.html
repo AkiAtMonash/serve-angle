@@ -46,17 +46,23 @@
 
 <section id="home" class="screen on">
   <h1>サーブ撮影</h1>
-  <p>お手本の角度を選ぶと、カメラの映像にお手本のコートの線（赤）と構え（水色）が重なるのだ。スマホは横向きで三脚に固定してほしいのだ。内カメなら、構えた位置から画面を見ながら合わせられるのだ（映像は鏡にせず、録画と同じ向きで出すのだ）。</p>
+  <p>お手本の角度を選ぶと、カメラの映像にお手本のコートの線（赤）と構え（水色）が重なるのだ。スマホは横向きで三脚に固定してほしいのだ。内カメなら、構えた位置から画面を見ながら合わせられるのだ（映像は鏡にせず、録画と同じ向きで出すのだ）。サーブ位置で両手を頭より上に上げて1秒止める（バンザイ。上げたまま振ってもいい）と録画が始まるのだ。</p>
   <div id="refs"></div>
   <div class="row">
     <label class="row"><button id="addBtn">お手本を動画から追加</button><input id="addFile" type="file" accept="video/*" hidden></label>
     <span id="addStatus"></span>
   </div>
+  <div class="row">
+    <button id="sendBtn" class="primary" hidden>Driveへ送る</button>
+    <button id="clearBtn" hidden>送った分をスマホから消す</button>
+    <span id="clipInfo" class="legend"></span>
+  </div>
   <div class="row legend">
     <label>カメラ <select id="facing"><option value="environment">背面</option><option value="user">内カメ</option></select></label>
     <label>骨格推定 <select id="model"><option value="lite">速い（lite）</option><option value="full">正確（full）</option></select></label>
     <label><input id="voice" type="checkbox" checked> 音声で指示</label>
-    <label><input id="auto" type="checkbox" checked> 合ったら自動で録画</label>
+    <label><input id="cont" type="checkbox"> 見返さずに次を待つ</label>
+    <label>録画開始 <select id="start"><option value="handsUp">両手を上げたら</option><option value="aligned">角度が合ったら</option><option value="manual">ボタンだけ</option></select></label>
   </div>
   <p class="legend">お手本はYouTube「【ソフトテニス】力を抜いた理想のフォーム！爆音サーブをスローモーション徹底分析！」から骨格の座標だけを取り出したものなのだ。映像は入っていないのだ。</p>
 </section>
@@ -95,8 +101,7 @@
       <select id="rate"><option value="0.25">1/4倍</option><option value="0.125">1/8倍</option><option value="0.5">1/2倍</option><option value="1">等倍</option></select>
       <select id="view"><option value="overlay">重ねる</option><option value="side">並べる</option></select>
       <label class="legend">ずらす <input id="offset" type="range" min="-1" max="1" step="0.02" value="0"></label>
-      <button id="save">Driveへ保存</button>
-      <button id="again">撮り直す</button>
+      <button id="again" class="primary">次を撮る</button>
     </div>
   </div>
 </section>

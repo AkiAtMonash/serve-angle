@@ -1,5 +1,6 @@
-import { createCoach, step as coachStep } from "./coach.js";
+import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, stanceFrame, warp } from "./serve.js";
+import { addClip, allClips, dropSent, markSent, nextBatch } from "./clips.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
 const MODEL = n => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${n}/float16/latest/pose_landmarker_${n}.task`;
@@ -168,7 +169,7 @@ $("addFile").onchange = async e => {
 };
 
 // ---------- shoot ----------
-let shootLoop = 0, recorder = null, rec = null, coach = createCoach();
+let shootLoop = 0, recorder = null, rec = null, coach = createCoach(), handsUp = createHandsUp();
 
 // MediaPipe's VIDEO mode tracks the person from the previous frame. A new camera (other size or
 // orientation) or a face filling the frame can leave it a zero-size region and every later call fails,
@@ -203,7 +204,7 @@ async function startShoot(r) {
   const cam = $("cam"); cam.srcObject = stream; await cam.play();
   try { wakeLock = await navigator.wakeLock?.request("screen"); } catch { /* screen may dim; not fatal */ }
   await landmarkers();
-  coach = createCoach();
+  coach = createCoach(); handsUp = createHandsUp();
   const id = ++shootLoop;
   everyFrame(cam, () => id === shootLoop, shootFrame);
 }
@@ -257,9 +258,11 @@ function shootFrame() {
   drawBones(g, toCanvas(ref.frames[ref.stance], r), COL.ref, 6, 0.55);
   if (pose) drawBones(g, toCanvas(pose, r), COL.you);
   const c = coachStep(coach, { t: now / 1000, pose, ref, aspect: camAsp, refAspect: refAsp, front: $("facing").value === "user" });
-  setStatus(c.score ?? "--", c.display.startsWith("OK"), c.display);
+  const start = $("start").value;
+  setStatus(c.score ?? "--", c.display.startsWith("OK"), start === "handsUp" && c.ok ? "OK。両手を上げると録画するのだ" : c.display);
   if (c.say) say(c.say);
-  if (c.ok && $("auto").checked) startRecording();
+  if (handsUpStep(handsUp, now / 1000, pose, camAsp) && start === "handsUp") startRecording();
+  else if (c.ok && start === "aligned") startRecording();
 }
 
 function setStatus(score, ok, text) {
@@ -271,9 +274,14 @@ function startRecording() {
   const types = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
   const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || "";
   recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-  const r = { t0: performance.now(), poses: [], times: [], frames: [], lastCheck: -1, mime: recorder.mimeType || mime, chunks: [], discard: false };
+  const r = { t0: performance.now(), date: new Date(), poses: [], times: [], frames: [], lastCheck: -1, mime: recorder.mimeType || mime, chunks: [], discard: false };
   recorder.ondataavailable = e => e.data.size && r.chunks.push(e.data);
-  recorder.onstop = () => r.discard ? closeFrames(r.frames) : openReview(new Blob(r.chunks, { type: r.mime }), r);
+  recorder.onstop = () => {
+    if (r.discard) return closeFrames(r.frames);
+    const blob = new Blob(r.chunks, { type: r.mime });
+    saveClip(blob, r);                                          // every serve is kept for Drive, reviewed or not
+    $("cont").checked ? closeFrames(r.frames) : openReview(blob, r);
+  };
   rec = r;
   recorder.start();
   $("rec").classList.add("on");
@@ -286,7 +294,15 @@ function stopRecording(discard = false) {
   rec.discard = discard; rec = null;
   recorder.stop();
   $("rec").classList.remove("on"); $("recInfo").textContent = "";
-  if (!discard) say("録画を止めたのだ");
+}
+
+// Keep the clip on the phone until it is sent to Drive from the home screen.
+async function saveClip(blob, r) {
+  handsUp = createHandsUp();
+  await addClip({ name: clipName(r.mime, ref.id, r.date), blob, sent: false });
+  const n = (await allClips()).filter(c => !c.sent).length;
+  $("recInfo").textContent = `未送信 ${n}本`;
+  say(`${n}本目を保存したのだ`);
 }
 
 $("rec").onclick = () => (rec ? stopRecording() : startRecording());
@@ -296,7 +312,7 @@ $("flip").onclick = () => {
   store.set("facing", $("facing").value);
   stopCamera(); startShoot(ref);
 };
-$("shootBack").onclick = () => { shootLoop++; stopRecording(true); stopCamera(); show("home"); };
+$("shootBack").onclick = () => { shootLoop++; stopRecording(true); stopCamera(); show("home"); updateClips(); };
 
 function stopCamera() {
   stream?.getTracks().forEach(t => t.stop()); stream = null;
@@ -397,27 +413,54 @@ for (const [id, dir] of [["back", -1], ["fwd", 1]]) {
 }
 $("rate").onchange = () => { $("rv").playbackRate = +$("rate").value; };
 $("view").onchange = $("offset").oninput = () => drawReview();
-$("save").onclick = async () => {
-  const ext = rv.mime.includes("mp4") ? "mp4" : "webm";
-  const d = new Date(), pad = n => String(n).padStart(2, "0");
-  const name = `serve_${ref.id}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${ext}`;
-  // Open the share sheet so the video can go to Google Drive and be seen from the PC;
-  // fall back to a plain download where sharing files is not supported.
-  const file = new File([rv.blob], name, { type: rv.mime.split(";")[0] });
-  if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: name }); return; }
-    catch (e) { if (e.name === "AbortError") return; }
+function clipName(mime, refId, d) {
+  const pad = n => String(n).padStart(2, "0");
+  return `serve_${refId}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${mime.includes("mp4") ? "mp4" : "webm"}`;
+}
+// Open the share sheet so the videos can go to Google Drive and be seen from the PC; fall back to
+// plain downloads where sharing files is not supported. Returns false if you cancelled.
+async function shareFiles(files) {
+  if (navigator.canShare?.({ files })) {
+    try { await navigator.share({ files, title: files.length > 1 ? `サーブ ${files.length}本` : files[0].name }); return true; }
+    catch (e) { if (e.name === "AbortError") return false; }
   }
-  const a = document.createElement("a");
-  a.href = rv.url; a.download = name;
-  a.click();
+  for (const f of files) {
+    const a = document.createElement("a"), url = URL.createObjectURL(f);
+    a.href = url; a.download = f.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  return true;
+}
+const asFile = (blob, name) => new File([blob], name, { type: blob.type.split(";")[0] });
+
+// ---------- clips waiting for Drive (continuous mode) ----------
+async function updateClips() {
+  const all = await allClips(), unsent = all.filter(c => !c.sent), sent = all.length - unsent.length;
+  $("sendBtn").hidden = !unsent.length; $("clearBtn").hidden = !sent;
+  $("sendBtn").textContent = `Driveへ送る（${nextBatch(unsent).length}本）`;
+  $("clipInfo").textContent = all.length ? `未送信 ${unsent.length}本・送信済み ${sent}本` : "";
+}
+// One share holds at most 10 clips, so each tap sends the next batch.
+$("sendBtn").onclick = async () => {
+  const batch = nextBatch((await allClips()).filter(c => !c.sent));
+  if (batch.length && await shareFiles(batch.map(c => asFile(c.blob, c.name)))) await markSent(batch);
+  updateClips();
+};
+$("clearBtn").onclick = async () => {
+  const sent = (await allClips()).filter(c => c.sent);
+  if (!confirm(`送信済み${sent.length}本をスマホから消すのだ？ 先にDriveに届いているか確かめてほしいのだ`)) return;
+  await dropSent(sent); updateClips();
 };
 const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; };
 $("again").onclick = () => { closeReview(); startShoot(ref); };
 $("reviewBack").onclick = () => { closeReview(); stopCamera(); show("home"); };
 
 // ---------- settings + start ----------
-for (const id of ["voice", "auto"]) { $(id).checked = store.get(id, true); $(id).onchange = () => store.set(id, $(id).checked); }
+$("voice").checked = store.get("voice", true); $("voice").onchange = () => store.set("voice", $("voice").checked);
+$("cont").checked = store.get("cont", false); $("cont").onchange = () => store.set("cont", $("cont").checked);
+$("start").value = store.get("start", "handsUp");
+if (!$("start").value) $("start").value = "handsUp";      // a stored choice that no longer exists ("wave")
+$("start").onchange = () => store.set("start", $("start").value);
 $("model").value = store.get("model", "lite");
 $("facing").value = store.get("facing", "environment");
 $("facing").onchange = () => store.set("facing", $("facing").value);
@@ -426,3 +469,4 @@ $("model").onchange = () => { store.set("model", $("model").value); live?.close(
 const builtIn = await fetch("refs.json").then(r => r.json()).then(d => d.refs);
 refs = [...builtIn, ...store.get("userRefs", [])];
 renderHome();
+updateClips();
