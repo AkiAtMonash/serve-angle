@@ -40,9 +40,12 @@ const angle = (a, b, c) => {
   return (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI;
 };
 
+// How far the higher wrist is above the nose, in torso lengths.
+const handHeight = p => (p[NOSE][1] - Math.min(p[LWR][1], p[RWR][1])) / torso(p);
+
 // One entry per serve: {trophy, contact} frame indices. fps = frames per second of the sequence.
 export function findServes(frames, fps) {
-  const above = frames.map(p => p ? (p[NOSE][1] - Math.min(p[LWR][1], p[RWR][1])) / torso(p) : -Infinity);
+  const above = frames.map(p => p ? handHeight(p) : -Infinity);
   const idx = above.flatMap((a, i) => (a > 0.5 ? [i] : []));
   const groups = [];
   let start = null;
@@ -70,6 +73,13 @@ export function findServes(frames, fps) {
     serves.push({ trophy, contact });
   }
   return serves;
+}
+
+// A recording started by raising both hands begins with the hands still up, and findServes takes that
+// raise (one hand comes down before the other) for a serve. Blank the frames until the hands are down.
+export function skipRaise(frames) {
+  const down = frames.findIndex(p => p && handHeight(p) < 0);   // both wrists below the nose
+  return down <= 0 ? frames : frames.map((p, i) => (i < down ? null : p));
 }
 
 // Frame of the ready stance before a serve: last frame before the trophy with both wrists below the shoulders.

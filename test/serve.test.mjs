@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { findServes, fixSwaps, stanceFrame, warp } from "../serve.js";
+import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "../serve.js";
 
 const refs = JSON.parse(readFileSync(new URL("../refs.json", import.meta.url))).refs;
 
@@ -16,6 +16,19 @@ for (const r of refs) {
     assert.equal(stanceFrame(r.frames, r.trophy), r.stance);
   });
 }
+
+// Field test 2026-10-25: three clips stopped 2.5 s in. Recording starts with both hands still up, one hand
+// comes down first, and findServes took that for a toss and a hit, so the "2 s after contact" rule fired.
+test("the hands-up start of a recording is not a serve", () => {
+  const d = JSON.parse(readFileSync(new URL("./raise.json", import.meta.url)));
+  const f = fixSwaps(d.frames, d.aspect);
+  assert.equal(findServes(f, d.fps).length, 1);          // what made the recording stop
+  assert.deepEqual(findServes(skipRaise(f), d.fps), []);
+});
+
+test("skipRaise leaves a serve that starts from the stance alone", () => {
+  for (const r of refs) assert.deepEqual(findServes(skipRaise(r.frames), 30), findServes(r.frames, 30));
+});
 
 test("fixSwaps undoes a single left/right swapped frame", () => {
   const f = refs[0].frames.map(p => p.map(q => q.slice()));

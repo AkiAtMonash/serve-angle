@@ -1,5 +1,5 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
-import { findServes, fixSwaps, stanceFrame, warp } from "./serve.js";
+import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
 import { addClip, allClips, dropClip } from "./clips.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
@@ -248,7 +248,7 @@ function shootFrame() {
     if (rec.poses.length > 30 && Math.floor(t * 4) !== rec.lastCheck) {
       rec.lastCheck = Math.floor(t * 4);
       const fps = rec.poses.length / Math.max(0.1, t);
-      const sv = findServes(fixSwaps(rec.poses, camAsp), fps).at(-1);
+      const sv = findServes(skipRaise(fixSwaps(rec.poses, camAsp)), fps).at(-1);
       if ((sv && t - rec.times[sv.contact] > 2) || t > 25) stopRecording();
     }
     return;
@@ -329,7 +329,7 @@ async function openReview(blob, data) {
   const url = URL.createObjectURL(blob);
   const poses = fixSwaps(data.poses, $("cam").videoWidth / $("cam").videoHeight);
   const fps = poses.length / Math.max(0.1, data.times.at(-1) ?? 1);
-  const sv = findServes(poses, fps).at(-1);
+  const sv = findServes(skipRaise(poses), fps).at(-1);
   rv = { url, blob, poses, times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
     you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] } : null };
   stepIdx = -1;
