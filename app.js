@@ -1,6 +1,6 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, stanceFrame, warp } from "./serve.js";
-import { addClip, allClips, dropSent, markSent, nextBatch } from "./clips.js";
+import { addClip, allClips, dropClip } from "./clips.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
 const MODEL = n => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${n}/float16/latest/pose_landmarker_${n}.task`;
@@ -279,7 +279,7 @@ function startRecording() {
   recorder.onstop = () => {
     if (r.discard) return closeFrames(r.frames);
     const blob = new Blob(r.chunks, { type: r.mime });
-    saveClip(blob, r);                                          // every serve is kept for Drive, reviewed or not
+    saveClip(blob, r);                                          // every serve goes to Drive, reviewed or not
     $("cont").checked ? closeFrames(r.frames) : openReview(blob, r);
   };
   rec = r;
@@ -296,13 +296,12 @@ function stopRecording(discard = false) {
   $("rec").classList.remove("on"); $("recInfo").textContent = "";
 }
 
-// Keep the clip on the phone until it is sent to Drive from the home screen.
+// Keep the clip on the phone until Drive has it.
 async function saveClip(blob, r) {
   handsUp = createHandsUp();
-  await addClip({ name: clipName(r.mime, ref.id, r.date), blob, sent: false });
-  const n = (await allClips()).filter(c => !c.sent).length;
-  $("recInfo").textContent = `未送信 ${n}本`;
-  say(`${n}本目を保存したのだ`);
+  await addClip({ name: clipName(r.mime, ref.id, r.date), blob });
+  say(store.get("driveUrl", "") ? "保存してDriveへ送るのだ" : "スマホに保存したのだ");
+  uploadClips();
 }
 
 $("rec").onclick = () => (rec ? stopRecording() : startRecording());
@@ -417,40 +416,43 @@ function clipName(mime, refId, d) {
   const pad = n => String(n).padStart(2, "0");
   return `serve_${refId}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${mime.includes("mp4") ? "mp4" : "webm"}`;
 }
-// Open the share sheet so the videos can go to Google Drive and be seen from the PC; fall back to
-// plain downloads where sharing files is not supported. Returns false if you cancelled.
-async function shareFiles(files) {
-  if (navigator.canShare?.({ files })) {
-    try { await navigator.share({ files, title: files.length > 1 ? `サーブ ${files.length}本` : files[0].name }); return true; }
-    catch (e) { if (e.name === "AbortError") return false; }
-  }
-  for (const f of files) {
-    const a = document.createElement("a"), url = URL.createObjectURL(f);
-    a.href = url; a.download = f.name; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  }
-  return true;
+// ---------- clips waiting for Drive ----------
+// Each clip is posted to the Apps Script in drive.gs, which saves it in the "PJ_TennisServe" folder of
+// My Drive. Failed clips stay on the phone and retry after the next serve, when the app opens, when
+// the phone is back online, or from the button.
+let uploading = null;
+function uploadClips() {
+  uploading ??= (async () => {
+    const url = store.get("driveUrl", ""), tried = new Set();
+    // Re-read the store each time so a serve recorded during the upload goes in the same run.
+    for (let c; url && (c = (await allClips()).find(x => !tried.has(x.name)));) {
+      tried.add(c.name);
+      $("clipInfo").textContent = `Driveへ送信中…`;
+      try {
+        const body = JSON.stringify({ name: c.name, mime: c.blob.type.split(";")[0], data: await base64(c.blob) });
+        if (await (await fetch(url, { method: "POST", body })).text() === "ok") await dropClip(c);
+      } catch { /* offline or a wrong URL: keep it for the next try */ }
+    }
+  })().finally(() => { uploading = null; updateClips(); });
+  return uploading;
 }
-const asFile = (blob, name) => new File([blob], name, { type: blob.type.split(";")[0] });
-
-// ---------- clips waiting for Drive (continuous mode) ----------
+const base64 = blob => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(r.result.slice(r.result.indexOf(",") + 1));
+  r.onerror = () => rej(r.error);
+  r.readAsDataURL(blob);
+});
 async function updateClips() {
-  const all = await allClips(), unsent = all.filter(c => !c.sent), sent = all.length - unsent.length;
-  $("sendBtn").hidden = !unsent.length; $("clearBtn").hidden = !sent;
-  $("sendBtn").textContent = `Driveへ送る（${nextBatch(unsent).length}本）`;
-  $("clipInfo").textContent = all.length ? `未送信 ${unsent.length}本・送信済み ${sent}本` : "";
+  const n = (await allClips()).length;
+  $("sendBtn").hidden = !n || !store.get("driveUrl", "");
+  $("sendBtn").textContent = `Driveへ送る（${n}本）`;
+  $("clipInfo").textContent = !n ? "" : store.get("driveUrl", "") ? `未送信 ${n}本` : `未送信 ${n}本。DriveのURLを入れると送るのだ`;
+  if (rec === null && $("shoot").classList.contains("on")) $("recInfo").textContent = n ? `未送信 ${n}本` : "";
 }
-// One share holds at most 10 clips, so each tap sends the next batch.
-$("sendBtn").onclick = async () => {
-  const batch = nextBatch((await allClips()).filter(c => !c.sent));
-  if (batch.length && await shareFiles(batch.map(c => asFile(c.blob, c.name)))) await markSent(batch);
-  updateClips();
-};
-$("clearBtn").onclick = async () => {
-  const sent = (await allClips()).filter(c => c.sent);
-  if (!confirm(`送信済み${sent.length}本をスマホから消すのだ？ 先にDriveに届いているか確かめてほしいのだ`)) return;
-  await dropSent(sent); updateClips();
-};
+$("sendBtn").onclick = () => uploadClips();
+$("driveUrl").value = store.get("driveUrl", "");
+$("driveUrl").onchange = () => { store.set("driveUrl", $("driveUrl").value.trim()); uploadClips(); };
+addEventListener("online", () => uploadClips());
 const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; };
 $("again").onclick = () => { closeReview(); startShoot(ref); };
 $("reviewBack").onclick = () => { closeReview(); stopCamera(); show("home"); };
@@ -469,4 +471,4 @@ $("model").onchange = () => { store.set("model", $("model").value); live?.close(
 const builtIn = await fetch("refs.json").then(r => r.json()).then(d => d.refs);
 refs = [...builtIn, ...store.get("userRefs", [])];
 renderHome();
-updateClips();
+uploadClips();
