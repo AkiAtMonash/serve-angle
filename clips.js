@@ -19,3 +19,6 @@ function tx(mode, fn) {
 export const addClip = clip => tx("readwrite", s => s.put(clip));
 export const allClips = () => tx("readonly", s => s.getAll());
 export const dropClip = c => tx("readwrite", s => s.delete(c.name));
+export const setFav = (name, fav) => tx("readwrite", s => { s.get(name).onsuccess = e => e.target.result && s.put({ ...e.target.result, fav }); });
+// A favourite gets "_fav" in the Drive file name, so the PC can find it among the clips.
+export const favName = name => name.replace(/(\.\w+)$/, "_fav$1");

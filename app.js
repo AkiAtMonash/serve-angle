@@ -1,6 +1,6 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
-import { addClip, allClips, dropClip } from "./clips.js";
+import { addClip, allClips, dropClip, favName, setFav } from "./clips.js";
 import { DRIVE_URL } from "./drive-url.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
@@ -281,9 +281,11 @@ function startRecording() {
   recorder.ondataavailable = e => e.data.size && r.chunks.push(e.data);
   recorder.onstop = () => {
     if (r.discard) return closeFrames(r.frames);
-    const blob = new Blob(r.chunks, { type: r.mime });
-    saveClip(blob, r);                                          // every serve goes to Drive, reviewed or not
-    $("cont").checked ? closeFrames(r.frames) : openReview(blob, r);
+    const blob = new Blob(r.chunks, { type: r.mime }), name = clipName(r.mime, ref.id, r.date);
+    saveClip(blob, name);                                       // every serve is kept for Drive, reviewed or not
+    // The review holds the upload so a favourite tapped there still names the Drive file.
+    if ($("cont").checked) { closeFrames(r.frames); uploadClips(); }
+    else openReview(blob, r, name);
   };
   rec = r;
   recorder.start();
@@ -300,11 +302,10 @@ function stopRecording(discard = false) {
 }
 
 // Keep the clip on the phone until Drive has it.
-async function saveClip(blob, r) {
+async function saveClip(blob, name) {
   handsUp = createHandsUp();
-  await addClip({ name: clipName(r.mime, ref.id, r.date), blob });
-  say(driveUrl() ? "保存してDriveへ送るのだ" : "スマホに保存したのだ");
-  uploadClips();
+  await addClip({ name, blob });
+  say("保存したのだ");
 }
 
 $("rec").onclick = () => (rec ? stopRecording() : startRecording());
@@ -327,14 +328,15 @@ let stepIdx = -1;   // >= 0: the review shows cached frame stepIdx instead of th
 
 const closeFrames = frames => Promise.all(frames).then(bs => bs.forEach(b => b?.close()));
 
-async function openReview(blob, data) {
+async function openReview(blob, data, name) {
   shootLoop++;
   const url = URL.createObjectURL(blob);
   const poses = fixSwaps(data.poses, $("cam").videoWidth / $("cam").videoHeight);
   const fps = poses.length / Math.max(0.1, data.times.at(-1) ?? 1);
   const sv = findServes(skipRaise(poses), fps).at(-1);
-  rv = { url, blob, poses, times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
+  rv = { url, blob, poses, name, fav: false, times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
     you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] } : null };
+  $("fav").textContent = "☆ お気に入り";
   stepIdx = -1;
   $("rvInfo").textContent = sv ? "トスが一番高い瞬間と打点でお手本に合わせてあるのだ" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
   show("review");
@@ -432,7 +434,7 @@ function uploadClips() {
       tried.add(c.name);
       $("clipInfo").textContent = `Driveへ送信中…`;
       try {
-        const body = JSON.stringify({ name: c.name, mime: c.blob.type.split(";")[0], data: await base64(c.blob) });
+        const body = JSON.stringify({ name: c.fav ? favName(c.name) : c.name, mime: c.blob.type.split(";")[0], data: await base64(c.blob) });
         if (await (await fetch(url, { method: "POST", body })).text() === "ok") await dropClip(c);
       } catch { /* offline or a wrong URL: keep it for the next try */ }
     }
@@ -454,7 +456,13 @@ async function updateClips() {
 }
 $("sendBtn").onclick = () => uploadClips();
 addEventListener("online", () => uploadClips());
-const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; };
+$("fav").onclick = async () => {
+  rv.fav = !rv.fav;
+  $("fav").textContent = rv.fav ? "★ お気に入り" : "☆ お気に入り";
+  await setFav(rv.name, rv.fav);
+};
+
+const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; uploadClips(); };
 $("again").onclick = () => { closeReview(); startShoot(ref); };
 $("reviewBack").onclick = () => { closeReview(); stopCamera(); show("home"); };
 
