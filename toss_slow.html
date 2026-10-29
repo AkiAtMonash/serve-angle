@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>見返しの速度：今の動きと新しい動きを比べる</title>
+<style>
+  :root { color-scheme: dark; --bg:#111; --fg:#eee; --mut:#999; --fast:#5ce1e6; --slow:#ffd60a; --mark:#ff453a; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:15px/1.6 system-ui,sans-serif; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  p.note { color:var(--mut); margin:0 0 12px; font-size:13px; }
+  select, button, input[type=range] { font:inherit; }
+  select, button { padding:8px 12px; border-radius:8px; border:1px solid #444; background:#1e1e1e; color:var(--fg); }
+  button { cursor:pointer; }
+  button.on { background:#4af; color:#000; border-color:#4af; }
+  button:disabled { opacity:.5; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  .row > label.file { padding:8px 12px; border-radius:8px; border:1px solid #444; background:#1e1e1e; cursor:pointer; }
+  video { width:100%; max-height:46vh; background:#000; border-radius:10px; display:block; }
+  .bar { position:relative; height:26px; margin:10px 0 4px; background:#1c1c1c; border-radius:6px; overflow:hidden; }
+  .zone { position:absolute; top:0; bottom:0; }
+  .zone.fast { background:#2b4a4d; } .zone.slow { background:#4a4326; }
+  .tick { position:absolute; top:0; bottom:0; width:2px; }
+  .tick.switch { background:var(--mark); width:3px; }
+  .tick.small { background:#777; }
+  .head { position:absolute; top:0; bottom:0; width:2px; background:#fff; }
+  .labels { display:flex; justify-content:space-between; color:var(--mut); font-size:12px; }
+  .badge { display:inline-block; min-width:5em; text-align:center; padding:6px 10px; border-radius:8px; background:#222; font-weight:600; }
+  .badge.fast { color:var(--fast); } .badge.slow { color:var(--slow); }
+  .legend { color:var(--mut); font-size:12px; }
+  b { color:#fff; }
+</style>
+</head>
+<body>
+<h1>見返しの速度：今の動きと新しい動きを比べる</h1>
+<p class="note">サーブの動画を1本えらぶと、今のアプリの動き（ずっとスロー）と、直したあとの動き（トスからスロー）を同じ動画で見比べられるのだ。黄色が等倍、灰色がスローで流れる区間なのだ。</p>
+
+<div class="row">
+  <label class="file">動画を選ぶ<input type="file" id="file" accept="video/*" hidden></label>
+  <select id="clip" hidden></select>
+  <span id="status" class="legend">まだ動画をえらんでいないのだ</span>
+</div>
+
+<video id="v" playsinline muted></video>
+
+<div class="bar" id="bar">
+  <div class="zone fast" id="zFast"></div><div class="zone slow" id="zSlow"></div>
+  <div class="tick small" id="tStance" title="構え"></div>
+  <div class="tick small" id="tTrophy" title="トスが一番高い瞬間"></div>
+  <div class="tick small" id="tContact" title="打点"></div>
+  <div class="tick switch" id="tSwitch" title="ここでスローになる"></div>
+  <div class="head" id="tHead"></div>
+</div>
+<div class="labels"><span>0秒</span><span id="lEnd"></span></div>
+
+<div class="row">
+  <select id="rate"><option value="0.5">1/2倍</option><option value="0.25" selected>1/4倍</option><option value="0.125">1/8倍</option></select>
+  <label class="legend">切り替えの手前 <input id="lead" type="range" min="0" max="2" step="0.1" value="0.5"> <span id="leadOut">0.5秒</span></label>
+</div>
+
+<div class="row">
+  <button id="old" disabled>今の動きで再生（ずっとスロー）</button>
+  <button id="new" disabled>新しい動きで再生（トスからスロー）</button>
+  <button id="pause">一時停止</button>
+  <span class="badge" id="badge">停止</span>
+</div>
+<p class="legend" id="readout">赤い縦線がスローの始まり、細い線が左から「構え」「トスが一番高い瞬間」「打点」なのだ。スライダーを動かすと、何秒前からスローにするかを変えられるのだ。</p>
+
+<script type="module">
+import { findServes, fixSwaps, skipRaise, stanceFrame } from "./serve.js";
+
+const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
+// Only on the PC: the past clips that sit next to the repo in .work (they are not on GitHub).
+const LOCAL = {
+  "10/25 105521": { src: "./.work/today/serve_right_20261025_105521.mp4", duration: 7.22, stance: 3.849, trophy: 4.153, contact: 5.064 },
+  "10/25 110311": { src: "./.work/today/serve_right_20261025_110311.mp4", duration: 6.74, stance: 3.59, trophy: 3.892, contact: 4.564 },
+  "10/25 111341（2本）": { src: "./.work/today/serve_right_20261025_111341.mp4", duration: 16.95, stance: 12.698, trophy: 14.307, contact: 14.91 },
+  "10/29 102954": { src: "./.work/20261029/serve_right_20261029_102954.mp4", duration: 11.74, stance: 7.431, trophy: 8.974, contact: 9.549 },
+  "10/29 104710": { src: "./.work/20261029/serve_right_20261029_104710.mp4", duration: 7.25, stance: 3.993, trophy: 4.228, contact: 5.201 },
+  "10/29 105354": { src: "./.work/20261029/serve_right_20261029_105354.mp4", duration: 8.49, stance: 4.982, trophy: 5.216, contact: 6.219 },
+};
+
+const $ = id => document.getElementById(id);
+const v = $("v");
+const st = $("status");
+let clip = null;                      // { duration, stance, trophy, contact }
+let mode = "old";                     // old = always slow, new = fast until the toss
+const slowRate = () => +$("rate").value;
+const switchAt = () => Math.max(0, clip.stance - +$("lead").value);
+
+const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
+if (isLocal) {
+  $("clip").hidden = false;
+  for (const k of Object.keys(LOCAL)) $("clip").add(new Option(k, k));
+  $("clip").onchange = () => { load(LOCAL[$("clip").value]); };
+}
+
+function setStatus(t) { st.textContent = t; }
+
+function layout() {
+  const on = !!clip;
+  for (const id of ["old", "new"]) $(id).disabled = !on;
+  if (!on) return;
+  const d = clip.duration, at = switchAt();
+  $("zFast").style.cssText = `left:0;width:${(at / d) * 100}%;display:${mode === "new" ? "block" : "none"}`;
+  $("zSlow").style.cssText = `left:${(at / d) * 100}%;width:${100 - (at / d) * 100}%`;
+  $("tSwitch").style.left = `${(at / d) * 100}%`;
+  $("tStance").style.left = `${(clip.stance / d) * 100}%`;
+  $("tTrophy").style.left = `${(clip.trophy / d) * 100}%`;
+  $("tContact").style.left = `${(clip.contact / d) * 100}%`;
+  $("lEnd").textContent = `${d.toFixed(1)}秒`;
+  $("readout").textContent = `スロー開始 ${at.toFixed(2)}秒（構え ${clip.stance.toFixed(2)}秒の${(+$("lead").value).toFixed(1)}秒前）`;
+}
+
+function load(c) {
+  clip = c;
+  mode = "old";
+  v.src = c.src;
+  layout();
+}
+
+// The app's drawReview does the same: 1x before the switch, the chosen rate after it.
+// (Recorded clips carry no duration in the header, so the bar uses the analysed length instead.)
+function tick() {
+  if (clip) {
+    if (!v.paused && v.duration) {
+      const rate = mode === "new" && v.currentTime < switchAt() ? 1 : slowRate();
+      if (v.playbackRate !== rate) v.playbackRate = rate;
+    }
+    $("tHead").style.left = `${Math.min(100, (v.currentTime / clip.duration) * 100)}%`;
+  }
+  const rate = v.paused ? null : v.playbackRate;
+  $("badge").textContent = rate === null ? "停止" : rate === 1 ? "等倍" : `1/${Math.round(1 / rate)}倍`;
+  $("badge").className = "badge " + (rate === null ? "" : rate === 1 ? "fast" : "slow");
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+const play = m => {
+  mode = m;
+  $("old").classList.toggle("on", m === "old"); $("new").classList.toggle("on", m === "new");
+  layout(); v.currentTime = 0; v.playbackRate = 1;
+  v.play();
+};
+$("old").onclick = () => play("old");
+$("new").onclick = () => play("new");
+$("pause").onclick = () => (v.paused ? v.play() : v.pause());
+$("rate").onchange = layout;
+$("lead").oninput = () => { $("leadOut").textContent = `${(+$("lead").value).toFixed(1)}秒`; layout(); };
+
+// ---------- pose analysis of a picked video (same rules as the app) ----------
+$("file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  try {
+    v.src = URL.createObjectURL(f);
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("動画を読めなかったのだ")); });
+    setStatus("骨格推定を準備中…");
+    const { FilesetResolver, PoseLandmarker } = await import(`${MP}/vision_bundle.mjs`);
+    const vision = await FilesetResolver.forVisionTasks(`${MP}/wasm`);
+    const opts = { baseOptions: { modelAssetPath: MODEL, delegate: "GPU" }, runningMode: "IMAGE", numPoses: 1 };
+    let lm;
+    try { lm = await PoseLandmarker.createFromOptions(vision, opts); }
+    catch { lm = await PoseLandmarker.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "CPU" } }); }
+    const fps = 15, n = Math.floor(v.duration * fps), frames = [];
+    for (let i = 0; i < n; i++) {
+      await new Promise(r => { v.onseeked = r; v.currentTime = i / fps; });
+      let out = null;
+      lm.detect(v, r => { if (r.landmarks.length) out = r.landmarks[0].map(p => [p.x, p.y, p.z, p.visibility ?? 1]); });
+      frames.push(out);
+      if (i % 5 === 0) setStatus(`骨格推定中… ${Math.round((i / n) * 100)}%`);
+    }
+    lm.close();
+    const poses = fixSwaps(frames, v.videoWidth / v.videoHeight);
+    const serv = findServes(skipRaise(poses), fps);
+    if (!serv.length) { setStatus("サーブが見つからなかったのだ。サーブ1本が全身で映っている動画にしてほしいのだ"); return; }
+    const sv = serv.at(-1), t = i => +(i / fps).toFixed(3);
+    const stance = stanceFrame(poses, sv.trophy);
+    clip = { src: v.src, duration: n / fps, stance: t(stance), trophy: t(sv.trophy), contact: t(sv.contact) };
+    mode = "old"; layout();
+    setStatus(`サーブを1本見つけたのだ（${serv.length}本のうち最後の1本）`);
+  } catch (err) {
+    setStatus(`うまくいかなかったのだ: ${err.message || err}`);
+  }
+};
+layout();
+</script>
+</body>
+</html>
