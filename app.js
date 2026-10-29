@@ -1,7 +1,7 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
 import { addClip, allClips, dropClip } from "./clips.js";
-import { chosenDriveUrl } from "./drive-url.js";
+import { DRIVE_URL } from "./drive-url.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
 const MODEL = n => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${n}/float16/latest/pose_landmarker_${n}.task`;
@@ -12,8 +12,8 @@ const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: settings just don't stick */ } },
 };
-// drive-url.js の値を優先し、そこが未記入のときだけ画面の欄に入れた値を使う。
-const driveUrl = () => chosenDriveUrl(store.get("driveUrl", ""));
+// 送信先は drive-url.js だけ。URLらしくなければ送信しない（クリップはスマホに残る）。
+const driveUrl = () => (DRIVE_URL.startsWith("https://") ? DRIVE_URL.trim() : "");
 
 // Show any crash on screen: on a phone at the court there is no console to look at.
 const showError = e => { const w = $("warn"); w.style.display = "block"; w.textContent = `エラー: ${e?.message || e}`; };
@@ -453,8 +453,6 @@ async function updateClips() {
   if (rec === null && $("shoot").classList.contains("on")) $("recInfo").textContent = n ? `未送信 ${n}本` : "";
 }
 $("sendBtn").onclick = () => uploadClips();
-$("driveUrl").value = driveUrl();
-$("driveUrl").onchange = () => { store.set("driveUrl", $("driveUrl").value.trim()); uploadClips(); };
 addEventListener("online", () => uploadClips());
 const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; };
 $("again").onclick = () => { closeReview(); startShoot(ref); };
