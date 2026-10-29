@@ -1,6 +1,7 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
 import { addClip, allClips, dropClip } from "./clips.js";
+import { chosenDriveUrl } from "./drive-url.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
 const MODEL = n => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${n}/float16/latest/pose_landmarker_${n}.task`;
@@ -11,6 +12,8 @@ const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: settings just don't stick */ } },
 };
+// drive-url.js の値を優先し、そこが未記入のときだけ画面の欄に入れた値を使う。
+const driveUrl = () => chosenDriveUrl(store.get("driveUrl", ""));
 
 // Show any crash on screen: on a phone at the court there is no console to look at.
 const showError = e => { const w = $("warn"); w.style.display = "block"; w.textContent = `エラー: ${e?.message || e}`; };
@@ -300,7 +303,7 @@ function stopRecording(discard = false) {
 async function saveClip(blob, r) {
   handsUp = createHandsUp();
   await addClip({ name: clipName(r.mime, ref.id, r.date), blob });
-  say(store.get("driveUrl", "") ? "保存してDriveへ送るのだ" : "スマホに保存したのだ");
+  say(driveUrl() ? "保存してDriveへ送るのだ" : "スマホに保存したのだ");
   uploadClips();
 }
 
@@ -423,7 +426,7 @@ function clipName(mime, refId, d) {
 let uploading = null;
 function uploadClips() {
   uploading ??= (async () => {
-    const url = store.get("driveUrl", ""), tried = new Set();
+    const url = driveUrl(), tried = new Set();
     // Re-read the store each time so a serve recorded during the upload goes in the same run.
     for (let c; url && (c = (await allClips()).find(x => !tried.has(x.name)));) {
       tried.add(c.name);
@@ -444,13 +447,13 @@ const base64 = blob => new Promise((res, rej) => {
 });
 async function updateClips() {
   const n = (await allClips()).length;
-  $("sendBtn").hidden = !n || !store.get("driveUrl", "");
+  $("sendBtn").hidden = !n || !driveUrl();
   $("sendBtn").textContent = `Driveへ送る（${n}本）`;
-  $("clipInfo").textContent = !n ? "" : store.get("driveUrl", "") ? `未送信 ${n}本` : `未送信 ${n}本。DriveのURLを入れると送るのだ`;
+  $("clipInfo").textContent = !n ? "" : driveUrl() ? `未送信 ${n}本` : `未送信 ${n}本。DriveのURLを入れると送るのだ`;
   if (rec === null && $("shoot").classList.contains("on")) $("recInfo").textContent = n ? `未送信 ${n}本` : "";
 }
 $("sendBtn").onclick = () => uploadClips();
-$("driveUrl").value = store.get("driveUrl", "");
+$("driveUrl").value = driveUrl();
 $("driveUrl").onchange = () => { store.set("driveUrl", $("driveUrl").value.trim()); uploadClips(); };
 addEventListener("online", () => uploadClips());
 const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; };
