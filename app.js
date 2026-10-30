@@ -38,7 +38,7 @@ function say(text) {
 // Where a video is actually drawn inside its element (object-fit: contain).
 function rectOf(el, vw, vh) {
   const W = el.clientWidth, H = el.clientHeight, k = Math.min(W / vw, H / vh);
-  return { x: (W - vw * k) / 2, y: (H - vh * k) / 2, w: vw * k, h: vh * k };
+  return { x: el.offsetLeft + (W - vw * k) / 2, y: el.offsetTop + (H - vh * k) / 2, w: vw * k, h: vh * k };
 }
 
 function fitCanvas(cv) {
@@ -344,6 +344,12 @@ async function openReview(blob, data, name) {
   $("rvInfo").textContent = sv ? "トスが一番高い瞬間と打点でお手本に合わせてあるのだ" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
   show("review");
   const v = $("rv"); v.src = url; v.playbackRate = rv.toss !== null ? 1 : +$("rate").value;
+  const refV = $("refV");
+  if (refV) {
+    refV.src = ref.video || "";
+    refV.load();
+  }
+  $("rvStage").classList.toggle("side", $("view").value === "side");
   const id = ++rvLoop;
   v.onloadeddata = () => { drawReview(); everyFrame(v, () => id === rvLoop, drawReview); };
 }
@@ -358,6 +364,9 @@ function nearestIndex(t) {
 function drawReview() {
   const v = $("rv"), g = fitCanvas($("rvOv"));
   if (!v.videoWidth) return;
+  const isSide = $("view").value === "side";
+  $("rvStage").classList.toggle("side", isSide);
+  const refV = $("refV");
   const r = rectOf(v, v.videoWidth, v.videoHeight);
   // Nothing worth seeing happens before the toss: play that part at normal speed and slow down from the toss.
   const rate = rv.toss !== null && v.currentTime < rv.toss ? 1 : +$("rate").value;
@@ -371,7 +380,25 @@ function drawReview() {
   if (!rv.you) return;
   const fi = warp(t + +$("offset").value, rv.you, ref);
   const rp = lerpPose(ref.frames, fi);
-  if ($("view").value === "overlay" && you) {
+
+  // Sync reference video
+  if (ref.video && refV) {
+    const proTime = Math.max(0, Math.min(refV.duration || 10, fi * 0.1001));
+    if (v.paused) {
+      if (!refV.paused) refV.pause();
+      if (Math.abs(refV.currentTime - proTime) > 0.03) refV.currentTime = proTime;
+    } else if (isSide) {
+      const k = (ref.contact - ref.trophy) / (rv.you.contact - rv.you.trophy);
+      const prRate = Math.max(0.05, Math.min(4, v.playbackRate * (k * 0.1001)));
+      if (refV.playbackRate !== prRate) refV.playbackRate = prRate;
+      if (refV.paused) refV.play().catch(() => {});
+      if (Math.abs(refV.currentTime - proTime) > 0.15) refV.currentTime = proTime;
+    } else {
+      if (!refV.paused) refV.pause();
+    }
+  }
+
+  if (!isSide && you) {
     // pro's skeleton scaled to your body and pinned at your hips (same as serve_compare.py)
     const px = (p, W, H) => p.map(q => [q[0] * W, q[1] * H]);
     const Y = px(you, r.w, r.h), R = px(rp, ref.width, ref.height);
@@ -379,32 +406,28 @@ function drawReview() {
     const tor = P => Math.hypot((P[11][0] + P[12][0]) / 2 - hip(P)[0], (P[11][1] + P[12][1]) / 2 - hip(P)[1]);
     const k = tor(Y) / tor(R), hy = hip(Y), hr = hip(R);
     drawBones(g, R.map((q, i) => [r.x + hy[0] + (q[0] - hr[0]) * k, r.y + hy[1] + (q[1] - hr[1]) * k, rp[i][3]]), COL.ref, 4, 0.9);
-  } else {
-    // side by side: the pro's skeleton in a panel on the right
-    const W = r.w * 0.38, H = r.h * 0.9, bx = r.x + r.w - W - 8, by = r.y + (r.h - H) / 2;
-    g.fillStyle = "#000c"; g.fillRect(bx, by, W, H);
-    const xs = rp.map(p => p[0] * ref.width), ys = rp.map(p => p[1] * ref.height);
-    const all = ref.frames.flat(), minY = Math.min(...all.map(p => p[1])) * ref.height, maxY = Math.max(...all.map(p => p[1])) * ref.height;
-    const k = (H * 0.9) / (maxY - minY), cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-    drawBones(g, xs.map((x, i) => [bx + W / 2 + (x - cx) * k, by + H * 0.05 + (ys[i] - minY) * k, rp[i][3]]), COL.ref, 4);
-    g.fillStyle = COL.ref; g.font = "14px system-ui"; g.fillText(`お手本：${ref.label}`, bx + 8, by + 20);
+  } else if (isSide && refV) {
+    const rr = rectOf(refV, refV.videoWidth || 640, refV.videoHeight || 360);
+    g.fillStyle = COL.ref; g.font = "14px system-ui"; g.fillText(`お手本：${ref.label}`, rr.x + 8, rr.y + 20);
   }
 }
 
 $("play").onclick = () => {
-  const v = $("rv");
-  if (v.ended) v.currentTime = 0;
+  const v = $("rv"), refV = $("refV");
+  if (v.ended) { v.currentTime = 0; if (refV) refV.currentTime = 0; }
   if (stepIdx >= 0) { v.currentTime = rv.times[stepIdx]; stepIdx = -1; }   // resume the video where stepping stopped
   if (v.paused) {
     const rate = rv?.toss !== null && v.currentTime < rv.toss ? 1 : +$("rate").value;
     if (v.playbackRate !== rate) v.playbackRate = rate;
     v.play();
+    if ($("view").value === "side" && refV?.src) refV.play().catch(() => {});
   } else {
     v.pause();
+    refV?.pause();
   }
   $("play").textContent = v.paused ? "再生" : "一時停止";
 };
-$("rv").onended = () => { $("play").textContent = "再生"; };
+$("rv").onended = () => { $("play").textContent = "再生"; $("refV")?.pause(); };
 
 // Frame stepping: draws the frames cached while recording, so there is no video seek
 // (a seek decodes from the last keyframe, up to ~100 frames back in Chrome's recordings).
@@ -480,7 +503,7 @@ $("fav").onclick = async () => {
   await setFav(rv.name, rv.fav);
 };
 
-const closeReview = () => { rvLoop++; URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; uploadClips(); };
+const closeReview = () => { rvLoop++; $("refV")?.pause(); URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; uploadClips(); };
 $("again").onclick = () => { closeReview(); startShoot(ref); };
 $("reviewBack").onclick = () => { closeReview(); stopCamera(); show("home"); };
 
