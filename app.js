@@ -343,7 +343,7 @@ async function openReview(blob, data, name) {
   stepIdx = -1;
   $("rvInfo").textContent = sv ? "トスが一番高い瞬間と打点でお手本に合わせてあるのだ" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
   show("review");
-  const v = $("rv"); v.src = url; v.playbackRate = +$("rate").value;
+  const v = $("rv"); v.src = url; v.playbackRate = rv.toss !== null ? 1 : +$("rate").value;
   const id = ++rvLoop;
   v.onloadeddata = () => { drawReview(); everyFrame(v, () => id === rvLoop, drawReview); };
 }
@@ -393,8 +393,16 @@ function drawReview() {
 
 $("play").onclick = () => {
   const v = $("rv");
+  if (v.ended) v.currentTime = 0;
   if (stepIdx >= 0) { v.currentTime = rv.times[stepIdx]; stepIdx = -1; }   // resume the video where stepping stopped
-  v.paused ? v.play() : v.pause(); $("play").textContent = v.paused ? "再生" : "一時停止";
+  if (v.paused) {
+    const rate = rv?.toss !== null && v.currentTime < rv.toss ? 1 : +$("rate").value;
+    if (v.playbackRate !== rate) v.playbackRate = rate;
+    v.play();
+  } else {
+    v.pause();
+  }
+  $("play").textContent = v.paused ? "再生" : "一時停止";
 };
 $("rv").onended = () => { $("play").textContent = "再生"; };
 
@@ -421,7 +429,11 @@ for (const [id, dir] of [["back", -1], ["fwd", 1]]) {
   b.onpointerup = b.onpointercancel = () => clearTimeout(timer);
   b.oncontextmenu = e => e.preventDefault();                   // long press must not open a menu on Android
 }
-$("rate").onchange = () => { $("rv").playbackRate = +$("rate").value; };
+$("rate").onchange = () => {
+  const v = $("rv");
+  const rate = rv?.toss !== null && v.currentTime < rv.toss ? 1 : +$("rate").value;
+  if (v.playbackRate !== rate) v.playbackRate = rate;
+};
 $("view").onchange = $("offset").oninput = () => drawReview();
 function clipName(mime, refId, d) {
   const pad = n => String(n).padStart(2, "0");
