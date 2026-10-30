@@ -335,7 +335,10 @@ async function openReview(blob, data, name) {
   const fps = poses.length / Math.max(0.1, data.times.at(-1) ?? 1);
   const sv = findServes(skipRaise(poses), fps).at(-1);
   rv = { url, blob, poses, name, fav: false, times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
-    you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] } : null };
+    you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] } : null,
+    // stanceFrame is the last frame with both hands below the shoulders, i.e. the toss has already
+    // started; step back 0.5 s so the slow motion begins just as the hands come together.
+    toss: sv ? Math.max(0, data.times[stanceFrame(poses, sv.trophy)] - 0.5) : null };
   $("fav").textContent = "☆ お気に入り";
   stepIdx = -1;
   $("rvInfo").textContent = sv ? "トスが一番高い瞬間と打点でお手本に合わせてあるのだ" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
@@ -356,6 +359,9 @@ function drawReview() {
   const v = $("rv"), g = fitCanvas($("rvOv"));
   if (!v.videoWidth) return;
   const r = rectOf(v, v.videoWidth, v.videoHeight);
+  // Nothing worth seeing happens before the toss: play that part at normal speed and slow down from the toss.
+  const rate = rv.toss !== null && v.currentTime < rv.toss ? 1 : +$("rate").value;
+  if (v.playbackRate !== rate) v.playbackRate = rate;
   const still = stepIdx >= 0 ? rv.frames[stepIdx] : null;
   if (still) g.drawImage(still, r.x, r.y, r.w, r.h);
   const i = still ? stepIdx : nearestIndex(v.currentTime);

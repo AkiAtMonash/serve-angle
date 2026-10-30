@@ -33,7 +33,7 @@
 </head>
 <body>
 <h1>見返しの速度：今の動きと新しい動きを比べる</h1>
-<p class="note">サーブの動画を1本えらぶと、今のアプリの動き（ずっとスロー）と、直したあとの動き（トスからスロー）を同じ動画で見比べられるのだ。黄色が等倍、灰色がスローで流れる区間なのだ。</p>
+<p class="note">サーブの動画を1本えらぶと、アプリと同じ動きで再生するのだ。トスが始まるまでは等倍で、トスからスローになるのだ。黄色が等倍、灰色がスローで流れる区間なのだ。</p>
 
 <div class="row">
   <label class="file">動画を選ぶ<input type="file" id="file" accept="video/*" hidden></label>
@@ -59,8 +59,7 @@
 </div>
 
 <div class="row">
-  <button id="old" disabled>今の動きで再生（ずっとスロー）</button>
-  <button id="new" disabled>新しい動きで再生（トスからスロー）</button>
+  <button id="play" disabled>再生（トスからスロー）</button>
   <button id="pause">一時停止</button>
   <span class="badge" id="badge">停止</span>
 </div>
@@ -85,7 +84,6 @@ const $ = id => document.getElementById(id);
 const v = $("v");
 const st = $("status");
 let clip = null;                      // { duration, stance, trophy, contact }
-let mode = "old";                     // old = always slow, new = fast until the toss
 const slowRate = () => +$("rate").value;
 const switchAt = () => Math.max(0, clip.stance - +$("lead").value);
 
@@ -100,10 +98,10 @@ function setStatus(t) { st.textContent = t; }
 
 function layout() {
   const on = !!clip;
-  for (const id of ["old", "new"]) $(id).disabled = !on;
+  $("play").disabled = !on;
   if (!on) return;
   const d = clip.duration, at = switchAt();
-  $("zFast").style.cssText = `left:0;width:${(at / d) * 100}%;display:${mode === "new" ? "block" : "none"}`;
+  $("zFast").style.cssText = `left:0;width:${(at / d) * 100}%`;
   $("zSlow").style.cssText = `left:${(at / d) * 100}%;width:${100 - (at / d) * 100}%`;
   $("tSwitch").style.left = `${(at / d) * 100}%`;
   $("tStance").style.left = `${(clip.stance / d) * 100}%`;
@@ -115,7 +113,6 @@ function layout() {
 
 function load(c) {
   clip = c;
-  mode = "old";
   v.src = c.src;
   layout();
 }
@@ -125,7 +122,7 @@ function load(c) {
 function tick() {
   if (clip) {
     if (!v.paused && v.duration) {
-      const rate = mode === "new" && v.currentTime < switchAt() ? 1 : slowRate();
+      const rate = v.currentTime < switchAt() ? 1 : slowRate();
       if (v.playbackRate !== rate) v.playbackRate = rate;
     }
     $("tHead").style.left = `${Math.min(100, (v.currentTime / clip.duration) * 100)}%`;
@@ -133,18 +130,15 @@ function tick() {
   const rate = v.paused ? null : v.playbackRate;
   $("badge").textContent = rate === null ? "停止" : rate === 1 ? "等倍" : `1/${Math.round(1 / rate)}倍`;
   $("badge").className = "badge " + (rate === null ? "" : rate === 1 ? "fast" : "slow");
-  requestAnimationFrame(tick);
+  setTimeout(tick, 60);        // a timer, not rAF: rAF stops when the tab is not being painted
 }
-requestAnimationFrame(tick);
+tick();
 
-const play = m => {
-  mode = m;
-  $("old").classList.toggle("on", m === "old"); $("new").classList.toggle("on", m === "new");
+const play = () => {
   layout(); v.currentTime = 0; v.playbackRate = 1;
   v.play();
 };
-$("old").onclick = () => play("old");
-$("new").onclick = () => play("new");
+$("play").onclick = play;
 $("pause").onclick = () => (v.paused ? v.play() : v.pause());
 $("rate").onchange = layout;
 $("lead").oninput = () => { $("leadOut").textContent = `${(+$("lead").value).toFixed(1)}秒`; layout(); };
@@ -178,7 +172,7 @@ $("file").onchange = async e => {
     const sv = serv.at(-1), t = i => +(i / fps).toFixed(3);
     const stance = stanceFrame(poses, sv.trophy);
     clip = { src: v.src, duration: n / fps, stance: t(stance), trophy: t(sv.trophy), contact: t(sv.contact) };
-    mode = "old"; layout();
+    layout();
     setStatus(`サーブを1本見つけたのだ（${serv.length}本のうち最後の1本）`);
   } catch (err) {
     setStatus(`うまくいかなかったのだ: ${err.message || err}`);
