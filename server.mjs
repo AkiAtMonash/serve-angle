@@ -11,6 +11,7 @@ import { serveWindows, reference } from "./refjob.js";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const WORK = join(ROOT, ".work", "refs");
+const FIXES = join(WORK, "ref_fixes.json");
 const PORT = +process.argv[2] || 8765;
 
 const TYPE = {
@@ -92,10 +93,23 @@ async function forgetRef(res, id) {
   send(res, 200, "ok");
 }
 
+// Notes from the check screen ("this bit looks wrong"), with the frame and the words, so a later pass
+// on the PC can correct the estimation.
+async function addFix(req, res) {
+  const note = JSON.parse(String(await body(req)) || "{}");
+  const list = await readFile(FIXES, "utf8").then(JSON.parse).catch(() => []);
+  list.push({ ...note, at: new Date().toISOString() });
+  await mkdir(WORK, { recursive: true });
+  await writeFile(FIXES, JSON.stringify(list, null, 1));
+  send(res, 200, "ok");
+}
+
 createServer(async (req, res) => {
   const p = decodeURIComponent(new URL(req.url, "http://x").pathname);
   try {
     if (req.method === "POST" && p === "/ref") return await newRef(req, res);
+    if (req.method === "POST" && p === "/fix") return await addFix(req, res);
+    if (req.method === "GET" && p === "/fix") return sendFile(req, res, FIXES, TYPE[".json"]);
     const job = /^\/ref\/([\w-]+)(?:\/(video|poses|accept|forget))?$/.exec(p);
     if (job) {
       const [, id, what] = job;

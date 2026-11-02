@@ -15,6 +15,11 @@ export function serveWindows(doc) {
   });
 }
 
+// Seconds in the reference video for pose frame `frame`. The built-in references are re-rendered at
+// one third of the speed (about 0.1 s of video per pose frame); an uploaded video keeps its own speed,
+// and starts at the beginning of the kept window, so it carries where it starts.
+export const videoTime = (ref, frame) => (ref.videoFrom ?? 0) + frame * (ref.videoStep ?? 0.1);
+
 // The reference entry for one window, in the same shape as refs.json (trophy/contact/stance counted
 // from the start of the window, because the app draws these frames without the rest of the video).
 export function reference(doc, win, { id, label }) {
@@ -25,6 +30,6 @@ export function reference(doc, win, { id, label }) {
   return {
     id, user: true, server: true, label, at: "", width: doc.width, height: doc.height,
     trophy: win.trophy - win.from, contact: win.contact - win.from, stance: win.stance - win.from,
-    lines: [], frames: frames.map(round),
+    lines: [], videoFrom: win.from / doc.fps, videoStep: 1 / doc.fps, frames: frames.map(round),
   };
 }

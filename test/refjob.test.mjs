@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { serveWindows, reference } from "../refjob.js";
+import { serveWindows, reference, videoTime } from "../refjob.js";
 
 const refs = JSON.parse(readFileSync(new URL("../refs.json", import.meta.url))).refs;
 const right = refs.find(x => x.id === "right_rear");
@@ -19,6 +19,14 @@ test("keeps the window around the serve it found", () => {
   assert.equal(r.contact, right.contact - wins[0].from);
   assert.equal(r.frames.length, wins[0].to - wins[0].from + 1);
   assert.ok(r.frames.every(p => p && p.length === 33), "every kept frame has a pose");
+  // the kept video still starts at the whole file, so frame 0 is drawn at that offset
+  assert.equal(videoTime(r, 0), wins[0].from / 30);
+  assert.equal(videoTime(r, 30), (wins[0].from + 30) / 30);
+});
+
+test("the built-in references keep their slow-motion timing", () => {
+  assert.equal(videoTime(right, 0), 0);
+  assert.equal(Math.round(videoTime(right, 30) * 10) / 10, 3);
 });
 
 test("a video with two serves offers both", () => {

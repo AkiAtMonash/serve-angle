@@ -1,5 +1,6 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
+import { videoTime } from "./refjob.js";
 import { addClip, allClips, dropClip, favName, setFav } from "./clips.js";
 import { DRIVE_URL } from "./drive-url.js";
 
@@ -111,7 +112,7 @@ function renderHome() {
     const t = document.createElement("b"); t.textContent = r.label;
     const s = document.createElement("small"); s.textContent = r.user ? "自分で追加" : `動画の${r.at}から`;
     b.append(cv, t, s);
-    b.onclick = () => startShoot(r);
+    b.onclick = () => openCheck(r);      // look at the skeleton over the video before shooting
     box.append(b);
     if (r.user) {
       const del = document.createElement("small"); del.textContent = "長押しで削除";
@@ -182,57 +183,110 @@ async function watchRefs() {
   } finally { watching = 0; }
 }
 
-// ---------- confirmation: does the skeleton match the video? ----------
+// ---------- check screen: does the skeleton match the video? ----------
+// Two uses: a video the PC just estimated (pick which serve to keep) and an existing reference
+// (look at it before shooting, and say where the skeleton looks wrong).
 let cf = null, cfLoop = 0;
 
 async function openConfirm(id, result) {
   if (!result.serves.length) { $("addStatus").textContent = "サーブが見つからなかったのだ。全身が映った動画にしてほしいのだ"; return; }
   const doc = await fetch(`/ref/${id}/poses`).then(r => r.json()).catch(() => null);
   if (!doc) { $("addStatus").textContent = "推定の結果を読めなかったのだ"; return; }
-  cf = { id, doc, serves: result.serves, sel: 0 };
-  const v = $("cfV");
-  v.src = `/ref/${id}/video`;
-  cfSel();
-  show("confirm");
-  const lid = ++cfLoop;
-  v.onloadeddata = () => { playWindow(); everyFrame(v, () => cfLoop === lid, drawConfirm); };
+  showCheck({
+    mode: "job", id, refId: `user_${id}`, label: "新しいお手本",
+    video: `/ref/${id}/video`, frames: doc.frames, from: 0, step: 1 / doc.fps,
+    serves: result.serves, sel: 0,
+  });
 }
 
-function cfSel() {
+function openCheck(r) {
+  showCheck({
+    mode: "ref", ref: r, refId: r.id, label: r.label, video: r.video || "",
+    frames: r.frames, from: r.videoFrom ?? 0, step: r.videoStep ?? 0.1,
+  });
+}
+
+function showCheck(state) {
+  cf = { ...state, comments: 0 };
+  $("cfInfo").textContent = cf.mode === "job" ? `サーブが${cf.serves.length}本見つかったのだ` : `お手本：${cf.label}`;
+  $("cfSave").textContent = cf.mode === "job" ? "この区間をお手本にする" : "この向きで撮る";
+  cfServes();
+  const v = $("cfV");
+  v.pause();
+  if (cf.video) v.src = cf.video; else v.removeAttribute("src");
+  show("confirm");
+  const lid = ++cfLoop;
+  drawConfirm();
+  if (cf.video) v.onloadeddata = () => { cfPlay(); everyFrame(v, () => cfLoop === lid, drawConfirm); };
+}
+
+function cfServes() {
   const box = $("cfServes"); box.innerHTML = "";
+  if (cf.mode !== "job") return;
   cf.serves.forEach((w, i) => {
     const b = document.createElement("button");
     b.textContent = `${i + 1}本目`;
     b.className = i === cf.sel ? "primary" : "";
-    b.onclick = () => { cf.sel = i; cfSel(); playWindow(); };
+    b.onclick = () => { cf.sel = i; cfServes(); cfPlay(); };
     box.append(b);
   });
 }
 
-const winOf = () => cf.serves[cf.sel];
+const cfWin = () => (cf.mode === "job" ? cf.serves[cf.sel] : null);
 
-function playWindow() {
-  const v = $("cfV"), w = winOf(), fps = cf.doc.fps;
-  v.playbackRate = 0.5;
-  v.currentTime = Math.max(0, w.from / fps - 0.7);
+// Job mode loops the chosen serve at half speed; a reference plays once, as it is.
+function cfPlay() {
+  const v = $("cfV");
+  if (!cf.video) return;
+  if (cf.mode === "job") {
+    v.playbackRate = 0.5;
+    v.currentTime = Math.max(0, cfWin().from * cf.step - 0.7);
+  } else {
+    v.playbackRate = 1;
+    v.currentTime = 0;
+  }
   v.play().catch(() => {});
 }
 
+const cfFrame = () => {
+  const v = $("cfV");
+  if (!cf.video || !v.videoWidth) return cf.mode === "ref" ? Math.min(cf.frames.length - 1, cf.ref?.stance ?? 0) : 0;
+  return Math.max(0, Math.min(cf.frames.length - 1, Math.round((v.currentTime - cf.from) / cf.step)));
+};
+
 function drawConfirm() {
+  if (!cf?.frames) return;
   const v = $("cfV"), g = fitCanvas($("cfOv"));
-  if (!v.videoWidth || !cf) return;
-  const fps = cf.doc.fps, w = winOf();
-  if (!v.paused && v.currentTime > w.to / fps + 0.4) { playWindow(); }
-  const r = rectOf(v, v.videoWidth, v.videoHeight);
-  const i = Math.max(0, Math.min(cf.doc.frames.length - 1, Math.round(v.currentTime * fps)));
-  const pose = cf.doc.frames[i];
-  if (pose) drawBones(g, toCanvas(pose, r), COL.you, 4);
-  $("cfInfo").textContent = `サーブが${cf.serves.length}本。${cf.sel + 1}本目 ${(w.from / fps).toFixed(1)}〜${(w.to / fps).toFixed(1)}秒（トス ${(w.trophy / fps).toFixed(1)}秒、打点 ${(w.contact / fps).toFixed(1)}秒）`;
+  if (cf.video && !v.videoWidth) return;            // still loading: keep the stage clear
+  const w = cfWin();
+  if (w && !v.paused && v.currentTime > w.to * cf.step + 0.4) cfPlay();
+  const pose = cf.frames[cfFrame()];
+  if (!pose) return;
+  // Without a video (a reference added on the phone earlier) the skeleton gets the whole stage.
+  const r = v.videoWidth ? rectOf(v, v.videoWidth, v.videoHeight)
+    : { x: 0, y: 0, w: $("cfOv").clientWidth, h: $("cfOv").clientHeight };
+  drawBones(g, toCanvas(pose, r), COL.you, 4);
 }
 
-$("cfV").onclick = () => { const v = $("cfV"); v.paused ? v.play().catch(() => {}) : v.pause(); };
+$("cfV").onclick = () => { const v = $("cfV"); if (!cf?.video) return; v.paused ? v.play().catch(() => {}) : v.pause(); };
 $("cfBack").onclick = () => { closeConfirm(); show("home"); watchRefs(); };
+
+// "This bit is wrong": a note with the frame and the words, kept on the PC for a correction.
+$("cfComment").onclick = async () => {
+  const what = prompt("どこが変？ 直してほしいところを書いてほしいのだ", "");
+  if (!what) return;
+  const v = $("cfV");
+  try {
+    const r = await fetch("/fix", { method: "POST", body: JSON.stringify({
+      refId: cf.refId, label: cf.label, frame: cfFrame(), time: +(v.currentTime || 0).toFixed(2), comment: what }) });
+    if (!r.ok) throw new Error("コメントを送れなかったのだ");
+    cf.comments++;
+    $("cfInfo").textContent = `コメントを送ったのだ（${cf.comments}件）`;
+  } catch (err) { $("cfInfo").textContent = String(err.message || err); }
+};
+
 $("cfSave").onclick = async () => {
+  if (cf.mode === "ref") { const r = cf.ref; closeConfirm(); startShoot(r); return; }
   const label = prompt("お手本の名前は？", `サーブ${cf.sel + 1}本目`);
   if (label === null) return;
   const b = $("cfSave"); b.disabled = true;
@@ -464,13 +518,13 @@ function drawReview() {
 
   // Sync reference video
   if (ref.video && refV) {
-    const proTime = Math.max(0, Math.min(refV.duration || 10, fi * 0.1001));
+    const proTime = Math.max(0, Math.min(refV.duration || 10, videoTime(ref, fi)));
     if (v.paused) {
       if (!refV.paused) refV.pause();
       if (Math.abs(refV.currentTime - proTime) > 0.03) refV.currentTime = proTime;
     } else if (isSide) {
       const k = (ref.contact - ref.trophy) / (rv.you.contact - rv.you.trophy);
-      const prRate = Math.max(0.05, Math.min(4, v.playbackRate * (k * 0.1001)));
+      const prRate = Math.max(0.05, Math.min(4, v.playbackRate * (k * (ref.videoStep ?? 0.1))));
       if (refV.playbackRate !== prRate) refV.playbackRate = prRate;
       if (refV.paused) refV.play().catch(() => {});
       if (Math.abs(refV.currentTime - proTime) > 0.15) refV.currentTime = proTime;
