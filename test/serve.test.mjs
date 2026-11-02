@@ -43,3 +43,13 @@ test("warp maps your trophy/contact onto the reference's", () => {
   assert.equal(warp(2.0, you, ref), 40);
   assert.equal(warp(2.5, you, ref), 55);
 });
+
+test("a wrist spike or take-back shortly after the toss is not taken for contact", () => {
+  const r = refs.find(x => x.id === "right_rear");
+  const f = r.frames.map(p => p.map(q => q.slice()));
+  f[45][16][1] = 0.01;
+  const s = findServes(f, 30);
+  assert.equal(s.length, 1);
+  assert.equal(s[0].trophy, r.trophy);
+  assert.equal(s[0].contact, r.contact);
+});

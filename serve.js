@@ -57,6 +57,7 @@ export function findServes(frames, fps) {
     }
   });
   const serves = [];
+  const minGap = Math.round(0.4 * fps);
   for (const [s, e] of groups) {
     const pad = Math.floor(0.5 * fps), lo = Math.max(0, s - pad), hi = Math.min(frames.length - 1, e + pad);
     const peak = {};
@@ -66,10 +67,19 @@ export function findServes(frames, fps) {
       peak[k] = best;
     }
     const [toss, hit] = ["L", "R"].sort((a, b) => peak[a] - peak[b]);   // toss arm peaks first
-    const trophy = peak[toss], contact = peak[hit];
-    if (contact - trophy < 2 || trophy < 0) continue;
+    const trophy = peak[toss];
+    if (trophy < 0) continue;
     const T = frames[trophy], [ts, te, tw] = SIDE[toss];
     if (angle(T[ts], T[te], T[tw]) < 130) continue;                     // bent toss arm: not a real serve
+
+    let contact = -1, byHit = Infinity;
+    for (let i = trophy + minGap; i <= hi; i++) {
+      if (frames[i] && frames[i][SIDE[hit][2]][1] < byHit) {
+        byHit = frames[i][SIDE[hit][2]][1];
+        contact = i;
+      }
+    }
+    if (contact < 0) continue;
     serves.push({ trophy, contact });
   }
   return serves;
