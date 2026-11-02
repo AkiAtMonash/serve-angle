@@ -1,5 +1,6 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
+import { poseFrames } from "./estimate.js";
 import { addClip, allClips, dropClip, favName, setFav } from "./clips.js";
 import { DRIVE_URL } from "./drive-url.js";
 
@@ -141,17 +142,19 @@ $("addFile").onchange = async e => {
   const file = e.target.files[0]; e.target.value = "";
   if (!file) return;
   const st = $("addStatus");
+  // The screen turning off stops the browser decoding the video, and the estimation with it.
+  const wake = await navigator.wakeLock?.request("screen").catch(() => null);
   try {
     st.textContent = "骨格推定を準備中…";
     const lm = await stillLandmarker();
     const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.src = URL.createObjectURL(file);
     await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("動画を読めなかったのだ")); });
-    const fps = 30, n = Math.floor(v.duration * fps), frames = [];
-    for (let i = 0; i < n; i++) {
-      await new Promise(r => { v.onseeked = r; v.currentTime = i / fps; });
-      frames.push(detect(lm, v));
-      if (i % 10 === 0) st.textContent = `骨格推定中… ${Math.round((i / n) * 100)}%`;
-    }
+    const fps = 30;
+    const frames = await poseFrames(v, src => detect(lm, src), {
+      fps,
+      onProgress: p => { st.textContent = `骨格推定中… ${Math.round(p * 100)}%`; },
+      onWait: () => { st.textContent = "画面が消えて止まっているのだ。画面を点けると続きから進むのだ"; },
+    });
     const fixed = fixSwaps(frames, v.videoWidth / v.videoHeight);
     const sv = findServes(fixed, fps)[0];
     if (!sv) throw new Error("サーブが見つからなかったのだ。1本のサーブが全身で映っている動画にしてほしいのだ");
@@ -169,6 +172,7 @@ $("addFile").onchange = async e => {
     st.textContent = `「${label}」を追加したのだ`;
     URL.revokeObjectURL(v.src);
   } catch (err) { st.textContent = String(err.message || err); }
+  finally { wake?.release?.(); }
 };
 
 // ---------- shoot ----------
