@@ -186,7 +186,7 @@ async function watchRefs() {
 // ---------- check screen: does the skeleton match the video? ----------
 // Two uses: a video the PC just estimated (pick which serve to keep) and an existing reference
 // (look at it before shooting, and say where the skeleton looks wrong).
-let cf = null, cfLoop = 0;
+let cf = null, cfLoop = 0, cfStepIx = -1;
 
 async function openConfirm(id, result) {
   if (!result.serves.length) { $("addStatus").textContent = "サーブが見つからなかったのだ。全身が映った動画にしてほしいのだ"; return; }
@@ -208,6 +208,9 @@ function openCheck(r) {
 
 function showCheck(state) {
   cf = { ...state, comments: 0 };
+  cfStepIx = -1;
+  $("cfRate").value = cf.mode === "job" ? "0.5" : "1";
+  $("cfPlayBtn").textContent = "再生";
   $("cfInfo").textContent = cf.mode === "job" ? `サーブが${cf.serves.length}本見つかったのだ` : `お手本：${cf.label}`;
   $("cfSave").textContent = cf.mode === "job" ? "この区間をお手本にする" : "この向きで撮る";
   cfServes();
@@ -227,24 +230,22 @@ function cfServes() {
     const b = document.createElement("button");
     b.textContent = `${i + 1}本目`;
     b.className = i === cf.sel ? "primary" : "";
-    b.onclick = () => { cf.sel = i; cfServes(); cfPlay(); };
+    b.onclick = () => { cf.sel = i; cfStepIx = -1; cfServes(); cfPlay(); };
     box.append(b);
   });
 }
 
 const cfWin = () => (cf.mode === "job" ? cf.serves[cf.sel] : null);
 
-// Job mode loops the chosen serve at half speed; a reference plays once, as it is.
+// Job mode loops the chosen serve; a reference plays once, as it is. Both at the speed picked below.
 function cfPlay() {
   const v = $("cfV");
   if (!cf.video) return;
-  if (cf.mode === "job") {
-    v.playbackRate = 0.5;
-    v.currentTime = Math.max(0, cfWin().from * cf.step - 0.7);
-  } else {
-    v.playbackRate = 1;
-    v.currentTime = 0;
-  }
+  v.playbackRate = +$("cfRate").value;
+  cfStepIx = -1;
+  $("cfPlayBtn").textContent = "一時停止";
+  if (cf.mode === "job") v.currentTime = Math.max(0, cfWin().from * cf.step - 0.7);
+  else v.currentTime = 0;
   v.play().catch(() => {});
 }
 
@@ -268,8 +269,44 @@ function drawConfirm() {
   drawBones(g, toCanvas(pose, r), COL.you, 4);
 }
 
-$("cfV").onclick = () => { const v = $("cfV"); if (!cf?.video) return; v.paused ? v.play().catch(() => {}) : v.pause(); };
+$("cfV").onclick = () => {
+  const v = $("cfV");
+  if (!cf?.video) return;
+  v.paused ? (v.play().catch(() => {}), $("cfPlayBtn").textContent = "一時停止")
+           : (v.pause(), $("cfPlayBtn").textContent = "再生");
+};
 $("cfBack").onclick = () => { closeConfirm(); show("home"); watchRefs(); };
+
+// One tap = one frame, holding keeps stepping. A lagging skeleton only shows when the frame stops.
+function cfStepFrame(dir) {
+  const v = $("cfV");
+  if (!cf?.frames || !cf.video) return;
+  v.pause();
+  $("cfPlayBtn").textContent = "再生";
+  cfStepIx = cfStepIx >= 0 ? cfStepIx : cfFrame();
+  cfStepIx = Math.max(0, Math.min(cf.frames.length - 1, cfStepIx + dir));
+  v.currentTime = Math.max(0, Math.min(cf.from + cfStepIx * cf.step, (v.duration || Infinity) - 0.001));
+  drawConfirm();
+}
+for (const [id, dir] of [["cfPrev", -1], ["cfNext", 1]]) {
+  let timer = 0;
+  const b = $(id);
+  b.onpointerdown = e => {
+    b.setPointerCapture(e.pointerId);
+    cfStepFrame(dir);
+    const go = wait => { timer = setTimeout(() => { cfStepFrame(dir); go(60); }, wait); };
+    go(350);
+  };
+  b.onpointerup = b.onpointercancel = () => clearTimeout(timer);
+  b.oncontextmenu = e => e.preventDefault();
+}
+$("cfPlayBtn").onclick = () => {
+  const v = $("cfV");
+  if (!cf?.video) return;
+  if (v.paused) { v.play().catch(() => {}); $("cfPlayBtn").textContent = "一時停止"; }
+  else { v.pause(); $("cfPlayBtn").textContent = "再生"; }
+};
+$("cfRate").onchange = () => { $("cfV").playbackRate = +$("cfRate").value; };
 
 // "This bit is wrong": a note with the frame and the words, kept on the PC for a correction.
 $("cfComment").onclick = async () => {
@@ -302,6 +339,7 @@ $("cfSave").onclick = async () => {
 
 function closeConfirm() {
   cfLoop++;
+  cfStepIx = -1;
   const v = $("cfV"); v.pause(); v.removeAttribute("src"); v.load();
   cf = null;
 }

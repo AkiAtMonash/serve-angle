@@ -125,12 +125,16 @@
     </div>
     <div class="hud bottom row">
       <span id="cfServes" class="row"></span>
+      <button id="cfPrev" class="step" aria-label="コマ戻し">◀</button>
+      <button id="cfPlayBtn" class="primary">再生</button>
+      <button id="cfNext" class="step" aria-label="コマ送り">▶</button>
+      <select id="cfRate"><option value="0.25">1/4倍</option><option value="0.125">1/8倍</option><option value="0.5">1/2倍</option><option value="1">等倍</option></select>
       <button id="cfComment">コメント</button>
       <button id="cfSave" class="primary">この区間をお手本にする</button>
     </div>
   </div>
 </section>
 
-<script type="module" src="app.js?v=10"></script>
+<script type="module" src="app.js?v=11"></script>
 </body>
 </html>
