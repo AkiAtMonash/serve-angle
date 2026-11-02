@@ -1,6 +1,5 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
-import { poseFrames } from "./estimate.js";
 import { addClip, allClips, dropClip, favName, setFav } from "./clips.js";
 import { DRIVE_URL } from "./drive-url.js";
 
@@ -22,7 +21,7 @@ addEventListener("error", e => showError(e.error || e.message));
 addEventListener("unhandledrejection", e => showError(e.reason));
 
 let refs = [], ref = null;
-let vision = null, live = null, still = null, Pose = null;   // MediaPipe fileset, VIDEO/IMAGE-mode landmarkers, class
+let vision = null, live = null, Pose = null;   // MediaPipe fileset, VIDEO-mode landmarker, class
 let stream = null, wakeLock = null;
 
 // ---------- small helpers ----------
@@ -87,15 +86,6 @@ async function landmarkers() {
   });
   try { live = await make("VIDEO", "GPU"); } catch { live = await make("VIDEO", "CPU"); }
 }
-async function stillLandmarker() {
-  await landmarkers();
-  if (!still) {
-    const opts = { baseOptions: { modelAssetPath: MODEL($("model").value), delegate: "GPU" }, runningMode: "IMAGE", numPoses: 1 };
-    try { still = await Pose.createFromOptions(vision, opts); }
-    catch { still = await Pose.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "CPU" } }); }
-  }
-  return still;
-}
 function detect(lm, src, ts) {
   let out = null;
   const cb = r => { if (r.landmarks.length) out = asPose(r.landmarks[0]); };
@@ -129,51 +119,138 @@ function renderHome() {
       b.oncontextmenu = e => {
         e.preventDefault();
         if (!confirm(`「${r.label}」を削除するのだ？`)) return;
-        store.set("userRefs", store.get("userRefs", []).filter(x => x.id !== r.id));
+        if (r.server) fetch(`/ref/${r.id.replace(/^user_/, "")}/forget`, { method: "POST" }).catch(() => {});
+        else store.set("userRefs", store.get("userRefs", []).filter(x => x.id !== r.id));
         refs = refs.filter(x => x !== r); renderHome();
       };
     }
   }
 }
 
-// Add a reference from a video file on the phone: pose on every frame, find the serve, keep a trimmed window.
+// Add a reference from a video file on the phone. The video goes to the PC and the estimation runs
+// there, so the phone can be closed (or put down) while it finishes. The PC finds every serve in the
+// file; the confirmation screen lets you check the skeleton against the video and keep one of them.
 $("addBtn").onclick = () => $("addFile").click();
 $("addFile").onchange = async e => {
   const file = e.target.files[0]; e.target.value = "";
   if (!file) return;
   const st = $("addStatus");
-  // The screen turning off stops the browser decoding the video, and the estimation with it.
-  const wake = await navigator.wakeLock?.request("screen").catch(() => null);
+  const wake = await navigator.wakeLock?.request("screen").catch(() => null);   // the upload needs the screen on
   try {
-    st.textContent = "骨格推定を準備中…";
-    const lm = await stillLandmarker();
-    const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.src = URL.createObjectURL(file);
-    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("動画を読めなかったのだ")); });
-    const fps = 30;
-    const frames = await poseFrames(v, src => detect(lm, src), {
-      fps,
-      onProgress: p => { st.textContent = `骨格推定中… ${Math.round(p * 100)}%`; },
-      onWait: () => { st.textContent = "画面が消えて止まっているのだ。画面を点けると続きから進むのだ"; },
-    });
-    const fixed = fixSwaps(frames, v.videoWidth / v.videoHeight);
-    const sv = findServes(fixed, fps)[0];
-    if (!sv) throw new Error("サーブが見つからなかったのだ。1本のサーブが全身で映っている動画にしてほしいのだ");
-    const stance = stanceFrame(fixed, sv.trophy);
-    const a = Math.max(0, stance - 10), b = Math.min(fixed.length - 1, sv.contact + Math.round(0.7 * fps));
-    const win = fixed.slice(a, b + 1);
-    // fill gaps so every frame has a pose
-    for (let i = 0; i < win.length; i++) win[i] ??= win[i - 1] ?? win.find(Boolean);
-    const label = prompt("お手本の名前は？", file.name.replace(/\.[^.]+$/, "")) || "自分のお手本";
-    const r = { id: `user_${Date.now()}`, user: true, label, at: "", width: v.videoWidth, height: v.videoHeight,
-      trophy: sv.trophy - a, contact: sv.contact - a, stance: stance - a, lines: [],
-      frames: win.map(p => p.map(q => q.map(x => Math.round(x * 1e4) / 1e4))) };
-    store.set("userRefs", [...store.get("userRefs", []), r]);
-    refs.push(r); renderHome();
-    st.textContent = `「${label}」を追加したのだ`;
-    URL.revokeObjectURL(v.src);
+    st.textContent = "PCへ送信中… 0%";
+    const id = await uploadRef(file, p => { st.textContent = `PCへ送信中… ${p}%`; });
+    store.set("pendingRefs", [...store.get("pendingRefs", []), id]);
+    $("addFile").value = "";
+    watchRefs();
   } catch (err) { st.textContent = String(err.message || err); }
   finally { wake?.release?.(); }
 };
+
+function uploadRef(file, onProgress) {
+  return new Promise((ok, fail) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", "/ref");
+    x.upload.onprogress = e => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
+    x.onload = () => {
+      try { ok(JSON.parse(x.responseText).id); }
+      catch { fail(new Error("PCに送れなかったのだ。PCでサーバーを動かしているか確かめてほしいのだ")); }
+    };
+    x.onerror = () => fail(new Error("PCに届かなかったのだ。PCでサーバーを動かしているか確かめてほしいのだ"));
+    x.send(file);
+  });
+}
+
+// Keep asking the PC about the jobs this phone started, including after the app was closed.
+let watching = 0;
+async function watchRefs() {
+  if (watching) return;
+  watching = 1;
+  try {
+    for (;;) {
+      const ids = store.get("pendingRefs", []);
+      if (!ids.length) { $("addStatus").textContent = ""; return; }
+      for (const id of ids) {
+        const r = await fetch(`/ref/${id}`).then(r => r.json()).catch(() => null);
+        if (!r || r.status === "running") continue;
+        store.set("pendingRefs", store.get("pendingRefs", []).filter(x => x !== id));
+        if (r.status === "done") { openConfirm(id, r); return; }        // one video at a time
+        $("addStatus").textContent = r.message || "推定できなかったのだ";
+      }
+      $("addStatus").textContent = "PCで骨格推定中。スマホを閉じても進むのだ";
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  } finally { watching = 0; }
+}
+
+// ---------- confirmation: does the skeleton match the video? ----------
+let cf = null, cfLoop = 0;
+
+async function openConfirm(id, result) {
+  if (!result.serves.length) { $("addStatus").textContent = "サーブが見つからなかったのだ。全身が映った動画にしてほしいのだ"; return; }
+  const doc = await fetch(`/ref/${id}/poses`).then(r => r.json()).catch(() => null);
+  if (!doc) { $("addStatus").textContent = "推定の結果を読めなかったのだ"; return; }
+  cf = { id, doc, serves: result.serves, sel: 0 };
+  const v = $("cfV");
+  v.src = `/ref/${id}/video`;
+  cfSel();
+  show("confirm");
+  const lid = ++cfLoop;
+  v.onloadeddata = () => { playWindow(); everyFrame(v, () => cfLoop === lid, drawConfirm); };
+}
+
+function cfSel() {
+  const box = $("cfServes"); box.innerHTML = "";
+  cf.serves.forEach((w, i) => {
+    const b = document.createElement("button");
+    b.textContent = `${i + 1}本目`;
+    b.className = i === cf.sel ? "primary" : "";
+    b.onclick = () => { cf.sel = i; cfSel(); playWindow(); };
+    box.append(b);
+  });
+}
+
+const winOf = () => cf.serves[cf.sel];
+
+function playWindow() {
+  const v = $("cfV"), w = winOf(), fps = cf.doc.fps;
+  v.playbackRate = 0.5;
+  v.currentTime = Math.max(0, w.from / fps - 0.7);
+  v.play().catch(() => {});
+}
+
+function drawConfirm() {
+  const v = $("cfV"), g = fitCanvas($("cfOv"));
+  if (!v.videoWidth || !cf) return;
+  const fps = cf.doc.fps, w = winOf();
+  if (!v.paused && v.currentTime > w.to / fps + 0.4) { playWindow(); }
+  const r = rectOf(v, v.videoWidth, v.videoHeight);
+  const i = Math.max(0, Math.min(cf.doc.frames.length - 1, Math.round(v.currentTime * fps)));
+  const pose = cf.doc.frames[i];
+  if (pose) drawBones(g, toCanvas(pose, r), COL.you, 4);
+  $("cfInfo").textContent = `サーブが${cf.serves.length}本。${cf.sel + 1}本目 ${(w.from / fps).toFixed(1)}〜${(w.to / fps).toFixed(1)}秒（トス ${(w.trophy / fps).toFixed(1)}秒、打点 ${(w.contact / fps).toFixed(1)}秒）`;
+}
+
+$("cfV").onclick = () => { const v = $("cfV"); v.paused ? v.play().catch(() => {}) : v.pause(); };
+$("cfBack").onclick = () => { closeConfirm(); show("home"); watchRefs(); };
+$("cfSave").onclick = async () => {
+  const label = prompt("お手本の名前は？", `サーブ${cf.sel + 1}本目`);
+  if (label === null) return;
+  const b = $("cfSave"); b.disabled = true;
+  try {
+    const r = await fetch(`/ref/${cf.id}/accept`, { method: "POST", body: JSON.stringify({ serve: cf.sel, label: label || `サーブ${cf.sel + 1}本目` }) });
+    if (!r.ok) throw new Error("保存できなかったのだ");
+    refs.push(await r.json()); renderHome();
+    $("addStatus").textContent = "お手本を追加したのだ";
+    closeConfirm(); show("home");
+  } catch (err) { $("addStatus").textContent = String(err.message || err); }
+  finally { b.disabled = false; }
+};
+
+function closeConfirm() {
+  cfLoop++;
+  const v = $("cfV"); v.pause(); v.removeAttribute("src"); v.load();
+  cf = null;
+}
 
 // ---------- shoot ----------
 let shootLoop = 0, recorder = null, rec = null, coach = createCoach(), handsUp = createHandsUp();
@@ -520,9 +597,15 @@ $("start").onchange = () => store.set("start", $("start").value);
 $("model").value = store.get("model", "lite");
 $("facing").value = store.get("facing", "environment");
 $("facing").onchange = () => store.set("facing", $("facing").value);
-$("model").onchange = () => { store.set("model", $("model").value); live?.close(); still?.close(); live = still = null; };
+$("model").onchange = () => { store.set("model", $("model").value); live?.close(); live = null; };
 
 const builtIn = await fetch("refs.json").then(r => r.json()).then(d => d.refs);
-refs = [...builtIn, ...store.get("userRefs", [])];
+const onPc = await fetch("refs_user.json").then(r => r.json()).then(d => d.refs).catch(() => []);
+refs = [...builtIn, ...onPc, ...store.get("userRefs", [])];
 renderHome();
+watchRefs();
 uploadClips();
+
+// ?confirm=<job id> opens a finished job straight away (for checking the screen on a PC).
+const job = new URLSearchParams(location.search).get("confirm");
+if (job) fetch(`/ref/${job}`).then(r => r.json()).then(r => r.status === "done" && openConfirm(job, r));
