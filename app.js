@@ -209,9 +209,10 @@ function openCheck(r) {
 function showCheck(state) {
   cf = { ...state, comments: 0 };
   cfStepIx = -1;
+  cf.info = cf.mode === "job" ? `サーブが${cf.serves.length}本見つかったのだ` : `お手本：${cf.label}`;
   $("cfRate").value = cf.mode === "job" ? "0.5" : "1";
   $("cfPlayBtn").textContent = "再生";
-  $("cfInfo").textContent = cf.mode === "job" ? `サーブが${cf.serves.length}本見つかったのだ` : `お手本：${cf.label}`;
+  $("cfInfo").textContent = cf.info;
   $("cfSave").textContent = cf.mode === "job" ? "この区間をお手本にする" : "この向きで撮る";
   cfServes();
   const v = $("cfV");
@@ -244,6 +245,7 @@ function cfPlay() {
   v.playbackRate = +$("cfRate").value;
   cfStepIx = -1;
   $("cfPlayBtn").textContent = "一時停止";
+  $("cfInfo").textContent = cf.info;
   if (cf.mode === "job") v.currentTime = Math.max(0, cfWin().from * cf.step - 0.7);
   else v.currentTime = 0;
   v.play().catch(() => {});
@@ -272,7 +274,7 @@ function drawConfirm() {
 $("cfV").onclick = () => {
   const v = $("cfV");
   if (!cf?.video) return;
-  v.paused ? (v.play().catch(() => {}), $("cfPlayBtn").textContent = "一時停止")
+  v.paused ? (v.play().catch(() => {}), $("cfPlayBtn").textContent = "一時停止", $("cfInfo").textContent = cf.info)
            : (v.pause(), $("cfPlayBtn").textContent = "再生");
 };
 $("cfBack").onclick = () => { closeConfirm(); show("home"); watchRefs(); };
@@ -284,26 +286,18 @@ function cfStepFrame(dir) {
   v.pause();
   $("cfPlayBtn").textContent = "再生";
   cfStepIx = cfStepIx >= 0 ? cfStepIx : cfFrame();
-  cfStepIx = Math.max(0, Math.min(cf.frames.length - 1, cfStepIx + dir));
+  // Stepping past the last frame starts over: at the end of a clip the button would look dead.
+  cfStepIx = cfStepIx + dir > cf.frames.length - 1 ? 0 : Math.max(0, cfStepIx + dir);
   v.currentTime = Math.max(0, Math.min(cf.from + cfStepIx * cf.step, (v.duration || Infinity) - 0.001));
+  $("cfInfo").textContent = `コマ ${cfStepIx + 1}/${cf.frames.length}`;   // says the tap landed even if the video lags
   drawConfirm();
 }
-for (const [id, dir] of [["cfPrev", -1], ["cfNext", 1]]) {
-  let timer = 0;
-  const b = $(id);
-  b.onpointerdown = e => {
-    b.setPointerCapture(e.pointerId);
-    cfStepFrame(dir);
-    const go = wait => { timer = setTimeout(() => { cfStepFrame(dir); go(60); }, wait); };
-    go(350);
-  };
-  b.onpointerup = b.onpointercancel = () => clearTimeout(timer);
-  b.oncontextmenu = e => e.preventDefault();
-}
+holdStep($("cfPrev"), () => cfStepFrame(-1));
+holdStep($("cfNext"), () => cfStepFrame(1));
 $("cfPlayBtn").onclick = () => {
   const v = $("cfV");
   if (!cf?.video) return;
-  if (v.paused) { v.play().catch(() => {}); $("cfPlayBtn").textContent = "一時停止"; }
+  if (v.paused) { v.play().catch(() => {}); $("cfPlayBtn").textContent = "一時停止"; $("cfInfo").textContent = cf.info; }
   else { v.pause(); $("cfPlayBtn").textContent = "再生"; }
 };
 $("cfRate").onchange = () => { $("cfV").playbackRate = +$("cfRate").value; };
@@ -613,18 +607,21 @@ function stepFrame(dir) {
   stepIdx = Math.max(0, Math.min(rv.frames.length - 1, stepIdx + dir));
   drawReview();
 }
-for (const [id, dir] of [["back", -1], ["fwd", 1]]) {
+// One tap = one step, holding keeps stepping. The first step runs before the pointer capture: a
+// browser that refuses the capture (no active pointer, odd touch stacks) must not swallow the tap.
+function holdStep(button, fn) {
   let timer = 0;
-  const b = $(id);
-  b.onpointerdown = e => {
-    b.setPointerCapture(e.pointerId);
-    stepFrame(dir);
-    const go = wait => { timer = setTimeout(() => { stepFrame(dir); go(60); }, wait); };
+  button.onpointerdown = e => {
+    fn();
+    try { button.setPointerCapture(e.pointerId); } catch { /* capture only makes the hold reliable */ }
+    const go = wait => { timer = setTimeout(() => { fn(); go(60); }, wait); };
     go(350);
   };
-  b.onpointerup = b.onpointercancel = () => clearTimeout(timer);
-  b.oncontextmenu = e => e.preventDefault();                   // long press must not open a menu on Android
+  button.onpointerup = button.onpointercancel = button.onpointerleave = () => clearTimeout(timer);
+  button.oncontextmenu = e => e.preventDefault();               // long press must not open a menu on Android
 }
+holdStep($("back"), () => stepFrame(-1));
+holdStep($("fwd"), () => stepFrame(1));
 $("rate").onchange = () => {
   const v = $("rv");
   const rate = rv?.toss !== null && v.currentTime < rv.toss ? 1 : +$("rate").value;
