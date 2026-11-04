@@ -698,3 +698,7 @@ const mine = await allRefs().catch(() => []).then(rows => rows.map(({ video, ...
 refs = [...builtIn, ...onPc, ...store.get("userRefs", []), ...mine];
 renderHome();
 uploadClips();
+
+// Keep the app on the phone so it opens with no connection (the reference videos still need one).
+// A browser only allows this on https or localhost, so a plain http server just skips it.
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
