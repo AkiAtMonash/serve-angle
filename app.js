@@ -217,7 +217,13 @@ function showCheck(state) {
   show("confirm");
   const lid = ++cfLoop;
   drawConfirm();
-  if (cf.video) v.onloadeddata = () => { cfPlay(); everyFrame(v, () => cfLoop === lid, drawConfirm); };
+  if (cf.video) {
+    // A reference video comes over the network (a few MB): say it is on its way instead of showing a
+    // black stage, and say so if it never arrives.
+    $("cfInfo").textContent = "動画を読み込み中…";
+    v.onerror = () => { $("cfInfo").textContent = "動画を読めなかったのだ。通信が弱いかもしれないから、もう一度開いてほしいのだ"; };
+    v.onloadeddata = () => { cfPlay(); everyFrame(v, () => cfLoop === lid, drawConfirm); };
+  }
 }
 
 function cfServes() {
@@ -256,7 +262,6 @@ const cfFrame = () => {
 function drawConfirm() {
   if (!cf?.frames) return;
   const v = $("cfV"), g = fitCanvas($("cfOv"));
-  if (cf.video && !v.videoWidth) return;            // still loading: keep the stage clear
   const w = cfWin();
   if (w && !v.paused && v.currentTime > w.to * cf.step + 0.4) cfPlay();
   const pose = cf.frames[cfFrame()];
