@@ -17,6 +17,15 @@ const store = {
 // 送信先は drive-url.js だけ。URLらしくなければ送信しない（クリップはスマホに残る）。
 const driveUrl = () => (DRIVE_URL.startsWith("https://") ? DRIVE_URL.trim() : "");
 
+// A phone on a weak connection drops a request now and then: try again before giving up, because
+// without refs.json the home screen has nothing to show.
+async function getJson(url, tries = 3) {
+  for (let i = 0; ; i++) {
+    try { return await fetch(url).then(r => r.json()); }
+    catch (e) { if (i >= tries - 1) throw e; await new Promise(r => setTimeout(r, 800 * (i + 1))); }
+  }
+}
+
 // Show any crash on screen: on a phone at the court there is no console to look at.
 const showError = e => { const w = $("warn"); w.style.display = "block"; w.textContent = `エラー: ${e?.message || e}`; };
 addEventListener("error", e => showError(e.error || e.message));
@@ -677,8 +686,8 @@ $("facing").value = store.get("facing", "environment");
 $("facing").onchange = () => store.set("facing", $("facing").value);
 $("model").onchange = () => { store.set("model", $("model").value); live?.close(); live = null; };
 
-const builtIn = await fetch("refs.json").then(r => r.json()).then(d => d.refs);
-const onPc = await fetch("refs_user.json").then(r => r.json()).then(d => d.refs).catch(() => []);
+const builtIn = await getJson("refs.json").then(d => d.refs);
+const onPc = await getJson("refs_user.json").then(d => d.refs).catch(() => []);
 // References added on this phone, with their video files, straight from IndexedDB.
 const mine = await allRefs().catch(() => []).then(rows => rows.map(({ video, ...r }) => ({ ...r, video: video ? URL.createObjectURL(video) : "" })));
 refs = [...builtIn, ...onPc, ...store.get("userRefs", []), ...mine];
