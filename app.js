@@ -1,7 +1,7 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
 import { videoTime } from "./refjob.js";
-import { addClip, allClips, dropClip, favName, setFav } from "./clips.js";
+import { addClip, allClips, dropClip, favName, figName, memoName, notesName, setFav, setFig, stamp } from "./clips.js?v=16";
 import { DRIVE_URL } from "./drive-url.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
@@ -36,6 +36,150 @@ function say(text) {
   speechSynthesis.speak(u);
 }
 
+// ---------- memo sheet ----------
+// The two notes this app keeps: what a favourite was watching for, and the note left when practice
+// ends. "保存" with an empty box is allowed, so a favourite does not need words.
+let memoBack = null;
+function askMemo(title, value = "", placeholder = "") {
+  $("memoTitle").textContent = title;
+  $("memoText").value = value;
+  $("memoText").placeholder = placeholder;
+  $("memo").classList.add("on");
+  setTimeout(() => $("memoText").focus(), 0);
+  return new Promise(res => { memoBack = res; });
+}
+function closeMemo(v) {
+  $("memo").classList.remove("on");
+  const done = memoBack;
+  memoBack = null;
+  done?.(v);                                  // null = やめる, otherwise the words (may be empty)
+}
+$("memoOk").onclick = () => closeMemo($("memoText").value.trim());
+$("memoCancel").onclick = () => closeMemo(null);
+
+// ---------- figure: your serve beside the pro's, at the moment the racket meets the ball ----------
+// Made on the phone right after a favourite, so it is there while you are still at the court. The same
+// PNG goes to Drive with the clip.
+const FIG = { w: 540, h: 960, torso: 5.6, up: 1.1, gap: 10, banner: 0.12 };
+const fHip = p => [(p[23][0] + p[24][0]) / 2, (p[23][1] + p[24][1]) / 2];
+const fTorso = p => {
+  const h = fHip(p);
+  return Math.hypot((p[11][0] + p[12][0]) / 2 - h[0], (p[11][1] + p[12][1]) / 2 - h[1]);
+};
+
+// Wait for the frame at `t` to show. A seek takes a few hundred ms; give up rather than hang the screen.
+function seekTo(v, t) {
+  return new Promise(res => {
+    if (!v || !v.videoWidth || !isFinite(t)) return res(false);
+    let done = false;
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      v.removeEventListener("seeked", onSeek);
+      res(ok);
+    };
+    const onSeek = () => finish(true);
+    v.addEventListener("seeked", onSeek);
+    setTimeout(() => finish(v.readyState >= 2), 1500);
+    try { v.currentTime = Math.max(0, Math.min(t, (v.duration || t) - 0.02)); } catch { finish(false); }
+  });
+}
+
+function figBones(g, q, color, width, dash) {
+  g.save(); g.strokeStyle = color; g.lineWidth = width; g.lineCap = "round";
+  g.setLineDash(dash ? [width * 2, width * 2] : []);
+  for (const [a, b] of BONES) {
+    if (!q[a] || !q[b]) continue;
+    g.beginPath(); g.moveTo(q[a][0], q[a][1]); g.lineTo(q[b][0], q[b][1]); g.stroke();
+  }
+  g.restore();
+}
+
+function figPanel(g, src, sw, sh, pts, color, k, topCut, ox, overlay) {
+  const tor = fTorso(pts), [hx, hy] = fHip(pts);
+  const ch = FIG.torso * tor * k, cw = ch * FIG.w / FIG.h;
+  const x0 = Math.max(0, Math.min(sw - cw, hx - cw / 2));
+  const y0 = Math.max(topCut, Math.min(sh - ch, hy - FIG.up * tor - ch / 2));
+  const sx = FIG.w / cw, sy = FIG.h / ch;
+  if (src) g.drawImage(src, x0, y0, cw, ch, ox, 0, FIG.w, FIG.h);
+  const at = p => [ox + (p[0] - x0) * sx, (p[1] - y0) * sy];
+  if (overlay) figBones(g, overlay.map(at), "rgba(92,225,230,0.92)", 2.5, true);
+  figBones(g, pts.map(at), color, 3, false);
+}
+
+function wrapText(g, text, maxWidth) {
+  const out = [];
+  let line = "";
+  for (const ch of text) {
+    if (ch === "\n") { out.push(line); line = ""; continue; }
+    if (line && g.measureText(line + ch).width > maxWidth) { out.push(line); line = ch; }
+    else line += ch;
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+async function makeFigure() {
+  if (!rv || !ref) return;
+  const rvV = $("rv"), refV = $("refV");
+  $("figNote").textContent = "";
+  rvV.pause();
+  $("play").textContent = "再生";
+  if (!rv.you) { $("rvMemo").textContent = "サーブが見つからなかったので、図は作れないのだ"; return; }
+
+  const youI = Math.min(rv.poses.length - 1, nearestIndex(rv.you.contact) + 1);
+  const proI = Math.min(ref.frames.length - 1, ref.impact ?? ref.contact);
+  const youPose = rv.poses[youI], proPose = ref.frames[proI];
+  if (!youPose || !proPose) return;
+
+  await seekTo(rvV, rv.times[youI] ?? 0);
+  const refOk = ref.video ? await seekTo(refV, videoTime(ref, proI)) : false;
+
+  const ys = { w: rvV.videoWidth || 1080, h: rvV.videoHeight || 1920 };
+  const ps = refOk ? { w: refV.videoWidth, h: refV.videoHeight } : { w: ref.width, h: ref.height };
+  const topCut = ref.video ? Math.round(ps.h * FIG.banner) : 0;
+  const yp = youPose.map(p => [p[0] * ys.w, p[1] * ys.h]);
+  const pp = proPose.map(p => [p[0] * ps.w, p[1] * ps.h]);
+
+  // One scale for both panels: the window is the same number of torso lengths on each side, made as
+  // tall as the tighter of the two frames allows, so the two people come out the same size.
+  const torY = fTorso(yp), torP = fTorso(pp);
+  const baseY = FIG.torso * torY, baseP = FIG.torso * torP;
+  const maxY = Math.min(ys.h, ys.w * FIG.h / FIG.w);
+  const maxP = Math.min(ps.h - topCut, ps.w * FIG.h / FIG.w);
+  if (baseY <= 0 || baseP <= 0 || maxY <= 0 || maxP <= 0) return;
+  const k = Math.min(maxY / baseY, maxP / baseP);
+
+  const scale = torY / torP, [yhx, yhy] = fHip(yp), [phx, phy] = fHip(pp);
+  const proOnYou = pp.map(q => [yhx + (q[0] - phx) * scale, yhy + (q[1] - phy) * scale]);
+
+  const cv = $("figCv"), g0 = cv.getContext("2d");
+  const memo = rv.memo || "";
+  let lines = [];
+  if (memo) { g0.font = "21px 'Yu Gothic', Meiryo, system-ui, sans-serif"; lines = wrapText(g0, memo, FIG.w * 2 + FIG.gap - 44).slice(0, 3); }
+  const barH = lines.length ? 20 + lines.length * 30 : 0;
+  cv.width = FIG.w * 2 + FIG.gap;
+  cv.height = FIG.h + barH;
+  const g = cv.getContext("2d");
+  g.fillStyle = "#0c0c0c"; g.fillRect(0, 0, cv.width, cv.height);
+
+  figPanel(g, rvV.videoWidth ? rvV : null, ys.w, ys.h, yp, "#ffd60a", k, 0, 0, proOnYou);
+  figPanel(g, refOk ? refV : null, ps.w, ps.h, pp, "#5ce1e6", k, topCut, FIG.w + FIG.gap);
+  if (ref.video && !refOk) $("figNote").textContent = "お手本の映像を読み込めなかったのだ（骨格だけ出しているのだ）";
+
+  if (lines.length) {
+    g.fillStyle = "rgba(0,0,0,0.92)"; g.fillRect(0, FIG.h, cv.width, barH);
+    g.font = "21px 'Yu Gothic', Meiryo, system-ui, sans-serif"; g.fillStyle = "#ffffff"; g.textBaseline = "top";
+    lines.forEach((line, n) => g.fillText(line, 22, FIG.h + 12 + n * 30));
+  }
+
+  $("fig").classList.add("on");
+  cv.toBlob(b => { if (b) { setFig(rv.name, b); uploadClips(); } }, "image/png");
+}
+
+$("figClose").onclick = () => $("fig").classList.remove("on");
+
+
 // Where a video is actually drawn inside its element (object-fit: contain).
 function rectOf(el, vw, vh) {
   const W = el.clientWidth, H = el.clientHeight, k = Math.min(W / vw, H / vh);
@@ -53,7 +197,7 @@ function fitCanvas(cv) {
 
 // pts: points in canvas pixels, [x, y, visibility]. Joints the model could not see (visibility < 0.5,
 // e.g. the racket-arm elbow behind the head during the racket drop) are guesses: drawn dashed.
-function drawBones(g, pts, color, width = 4, alpha = 1) {
+function drawBones(g, pts, color, width = 2, alpha = 1) {
   g.save(); g.globalAlpha = alpha; g.strokeStyle = color; g.lineWidth = width; g.lineCap = "round";
   for (const [a, b] of BONES) {
     if (!pts[a] || !pts[b]) continue;
@@ -101,7 +245,7 @@ function thumb(cv, r) {
   const k = Math.min(320 / r.width, 180 / r.height), rr = { w: r.width * k, h: r.height * k };
   rr.x = (320 - rr.w) / 2; rr.y = (180 - rr.h) / 2;
   drawLines(g, r.lines || [], rr, 1);
-  drawBones(g, toCanvas(r.frames[r.stance], rr), COL.ref, 2);
+  drawBones(g, toCanvas(r.frames[r.stance], rr), COL.ref, 1);
 }
 
 function renderHome() {
@@ -268,7 +412,7 @@ function drawConfirm() {
   // Without a video (a reference added on the phone earlier) the skeleton gets the whole stage.
   const r = v.videoWidth ? rectOf(v, v.videoWidth, v.videoHeight)
     : { x: 0, y: 0, w: $("cfOv").clientWidth, h: $("cfOv").clientHeight };
-  drawBones(g, toCanvas(pose, r), COL.you, 4);
+  drawBones(g, toCanvas(pose, r), COL.you, 2);
 }
 
 $("cfV").onclick = () => {
@@ -425,7 +569,7 @@ function shootFrame() {
   }
 
   drawLines(g, ref.lines || [], r);
-  drawBones(g, toCanvas(ref.frames[ref.stance], r), COL.ref, 6, 0.55);
+  drawBones(g, toCanvas(ref.frames[ref.stance], r), COL.ref, 3, 0.55);
   if (pose) drawBones(g, toCanvas(pose, r), COL.you);
   const c = coachStep(coach, { t: now / 1000, pose, ref, aspect: camAsp, refAspect: refAsp, front: $("facing").value === "user" });
   const start = $("start").value;
@@ -482,7 +626,15 @@ $("flip").onclick = () => {
   store.set("facing", $("facing").value);
   stopCamera(); startShoot(ref);
 };
-$("shootBack").onclick = () => { shootLoop++; stopRecording(true); stopCamera(); show("home"); updateClips(); };
+$("shootBack").onclick = () => leaveShoot();
+// The end of practice: one note for the day, kept as a .txt in the same Drive folder as the clips.
+$("finish").onclick = async () => {
+  const memo = await askMemo("今日のメモ", "", "例：トスを前に出すのを意識した。打点はまだ後ろ");
+  if (memo === null) return;                          // やめる: stay on the camera and keep practising
+  if (memo) await addClip({ name: notesName(), blob: new Blob([memo], { type: "text/plain" }) });
+  leaveShoot();
+};
+function leaveShoot() { shootLoop++; stopRecording(true); stopCamera(); show("home"); updateClips(); uploadClips(); }
 
 function stopCamera() {
   stream?.getTracks().forEach(t => t.stop()); stream = null;
@@ -501,12 +653,13 @@ async function openReview(blob, data, name) {
   const poses = fixSwaps(data.poses, $("cam").videoWidth / $("cam").videoHeight);
   const fps = poses.length / Math.max(0.1, data.times.at(-1) ?? 1);
   const sv = findServes(skipRaise(poses), fps).at(-1);
-  rv = { url, blob, poses, name, fav: false, times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
+  rv = { url, blob, poses, name, fav: false, memo: "", times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
     you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] } : null,
     // stanceFrame is the last frame with both hands below the shoulders, i.e. the toss has already
     // started; step back 0.5 s so the slow motion begins just as the hands come together.
     toss: sv ? Math.max(0, data.times[stanceFrame(poses, sv.trophy)] - 0.5) : null };
   $("fav").textContent = "☆ お気に入り";
+  $("rvMemo").textContent = "";
   stepIdx = -1;
   $("rvInfo").textContent = sv ? "トスが一番高い瞬間と打点でお手本に合わせてあるのだ" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
   show("review");
@@ -572,7 +725,7 @@ function drawReview() {
     const hip = P => [(P[23][0] + P[24][0]) / 2, (P[23][1] + P[24][1]) / 2];
     const tor = P => Math.hypot((P[11][0] + P[12][0]) / 2 - hip(P)[0], (P[11][1] + P[12][1]) / 2 - hip(P)[1]);
     const k = tor(Y) / tor(R), hy = hip(Y), hr = hip(R);
-    drawBones(g, R.map((q, i) => [r.x + hy[0] + (q[0] - hr[0]) * k, r.y + hy[1] + (q[1] - hr[1]) * k, rp[i][3]]), COL.ref, 4, 0.9);
+    drawBones(g, R.map((q, i) => [r.x + hy[0] + (q[0] - hr[0]) * k, r.y + hy[1] + (q[1] - hr[1]) * k, rp[i][3]]), COL.ref, 2, 0.9);
   } else if (isSide && refV) {
     const rr = rectOf(refV, refV.videoWidth || 640, refV.videoHeight || 360);
     g.fillStyle = COL.ref; g.font = "14px system-ui"; g.fillText(`お手本：${ref.label}`, rr.x + 8, rr.y + 20);
@@ -629,8 +782,7 @@ $("rate").onchange = () => {
 };
 $("view").onchange = $("offset").oninput = () => drawReview();
 function clipName(mime, refId, d) {
-  const pad = n => String(n).padStart(2, "0");
-  return `serve_${refId}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${mime.includes("mp4") ? "mp4" : "webm"}`;
+  return `serve_${refId}_${stamp(d)}.${mime.includes("mp4") ? "mp4" : "webm"}`;
 }
 // ---------- clips waiting for Drive ----------
 // Each clip is posted to the Apps Script in drive.gs, which saves it in the "PJ_TennisServe" folder of
@@ -645,13 +797,23 @@ function uploadClips() {
       tried.add(c.name);
       $("clipInfo").textContent = `Driveへ送信中…`;
       try {
-        const body = JSON.stringify({ name: c.fav ? favName(c.name) : c.name, mime: c.blob.type.split(";")[0], data: await base64(c.blob) });
-        if (await (await fetch(url, { method: "POST", body })).text() === "ok") await dropClip(c);
+        // A favourite goes up under its _fav name, then its memo and its figure beside it. If either
+        // does not make it, the clip stays on the phone so the next try sends it again.
+        const name = c.fav ? favName(c.name) : c.name;
+        if (await postClip(url, name, c.blob)) {
+          const memoOk = !c.fav || !c.memo || await postClip(url, memoName(c.name), new Blob([c.memo], { type: "text/plain" }));
+          const figOk = !c.fav || !c.fig || await postClip(url, figName(c.name), c.fig);
+          if (memoOk && figOk) await dropClip(c);
+        }
       } catch { /* offline or a wrong URL: keep it for the next try */ }
     }
   })().finally(() => { uploading = null; updateClips(); });
   return uploading;
 }
+const postClip = async (url, name, blob) => {
+  const body = JSON.stringify({ name, mime: blob.type.split(";")[0], data: await base64(blob) });
+  return (await (await fetch(url, { method: "POST", body })).text()) === "ok";
+};
 const base64 = blob => new Promise((res, rej) => {
   const r = new FileReader();
   r.onload = () => res(r.result.slice(r.result.indexOf(",") + 1));
@@ -661,16 +823,28 @@ const base64 = blob => new Promise((res, rej) => {
 async function updateClips() {
   const n = (await allClips()).length;
   $("sendBtn").hidden = !n || !driveUrl();
-  $("sendBtn").textContent = `Driveへ送る（${n}本）`;
-  $("clipInfo").textContent = !n ? "" : driveUrl() ? `未送信 ${n}本` : `未送信 ${n}本。DriveのURLを入れると送るのだ`;
-  if (rec === null && $("shoot").classList.contains("on")) $("recInfo").textContent = n ? `未送信 ${n}本` : "";
+  $("sendBtn").textContent = `Driveへ送る（${n}件）`;
+  $("clipInfo").textContent = !n ? "" : driveUrl() ? `未送信 ${n}件` : `未送信 ${n}件。DriveのURLを入れると送るのだ`;
+  if (rec === null && $("shoot").classList.contains("on")) $("recInfo").textContent = n ? `未送信 ${n}件` : "";
 }
 $("sendBtn").onclick = () => uploadClips();
 addEventListener("online", () => uploadClips());
 $("fav").onclick = async () => {
-  rv.fav = !rv.fav;
-  $("fav").textContent = rv.fav ? "★ お気に入り" : "☆ お気に入り";
-  await setFav(rv.name, rv.fav);
+  if (rv.fav) {                                    // tap the star again: no longer a favourite
+    rv.fav = false;
+    $("fav").textContent = "☆ お気に入り";
+    $("rvMemo").textContent = "";
+    await setFav(rv.name, false, rv.memo);          // the words stay on the phone in case the star comes back
+    return;
+  }
+  // "What were you watching for?" asked right there, so it is recorded while the serve is fresh.
+  const memo = await askMemo("何を意識した？（お気に入り）", rv.memo, "例：トスを前に出す、打点を高く");
+  if (memo === null) return;
+  rv.fav = true; rv.memo = memo;
+  $("fav").textContent = "★ お気に入り";
+  $("rvMemo").textContent = memo ? `メモ：${memo}` : "";
+  await setFav(rv.name, true, memo);
+  makeFigure().catch(showError);          // the picture shows up a second later, over the review
 };
 
 const closeReview = () => { rvLoop++; $("refV")?.pause(); URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; uploadClips(); };

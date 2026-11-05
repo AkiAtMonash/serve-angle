@@ -48,6 +48,19 @@
   .legend { font-size:13px; color:var(--mut); }
   .legend i { font-style:normal; } .you { color:var(--you); } .ref { color:var(--ref); } .ln { color:var(--line); }
   #warn { position:absolute; inset:auto 12px 100px 12px; text-align:center; background:#000c; border-radius:10px; padding:8px; display:none; }
+  /* memo sheet: what you were watching for, and the note at the end of practice */
+  #memo { position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center; padding:16px; background:#000c; }
+  #memo.on { display:flex; }
+  #memo .box { width:min(520px, 100%); background:var(--panel); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:10px; }
+  #memo h2 { margin:0; font-size:17px; }
+  #memo textarea { width:100%; min-height:120px; padding:10px; border:1px solid #444; border-radius:10px; background:#111; color:var(--fg); font:inherit; resize:vertical; }
+  #rvMemo { flex-basis:100%; text-align:center; }
+  /* the figure made when a serve is favourited: your serve beside the pro's, at contact */
+  #fig { position:fixed; inset:0; z-index:11; display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:12px; background:#000e; }
+  #fig.on { display:flex; }
+  #fig canvas { max-width:100%; max-height:76vh; width:auto; height:auto; border-radius:10px; background:#111; }
+  #figNote { color:var(--mut); font-size:13px; }
+  #figClose { padding:10px 22px; }
 </style>
 </head>
 <body>
@@ -83,6 +96,7 @@
       <button id="flip" aria-label="カメラ切り替え">⇄</button>
       <span id="score" class="badge">--</span>
       <span id="say">起動中…</span>
+      <button id="finish">練習を終える</button>
     </div>
     <div id="warn"></div>
     <div class="hud bottom">
@@ -110,6 +124,7 @@
       <select id="view"><option value="overlay">重ねる</option><option value="side">並べる</option></select>
       <label class="legend">ずらす <input id="offset" type="range" min="-1" max="1" step="0.02" value="0"></label>
       <button id="fav">☆ お気に入り</button>
+      <span id="rvMemo" class="legend"></span>
       <button id="again" class="primary">次を撮る</button>
     </div>
   </div>
@@ -135,6 +150,23 @@
   </div>
 </section>
 
-<script type="module" src="app.js?v=14"></script>
+<div id="memo">
+  <div class="box">
+    <h2 id="memoTitle"></h2>
+    <textarea id="memoText"></textarea>
+    <div class="row">
+      <button id="memoCancel">やめる</button>
+      <button id="memoOk" class="primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="fig">
+  <canvas id="figCv"></canvas>
+  <span id="figNote"></span>
+  <button id="figClose" class="primary">閉じる</button>
+</div>
+
+<script type="module" src="app.js?v=17"></script>
 </body>
 </html>
