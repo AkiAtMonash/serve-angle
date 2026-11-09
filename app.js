@@ -1,7 +1,8 @@
 import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./coach.js";
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
-import { videoTime } from "./refjob.js";
-import { addClip, allClips, dropClip, favName, figName, memoName, notesName, setFav, setFig, stamp } from "./clips.js?v=16";
+import { reference, serveWindows, videoTime } from "./refjob.js";
+import { poseFrames } from "./estimate.js";
+import { addClip, allClips, dropClip, favName, figName, memoName, notesName, setFav, setFig, stamp, putRef, allRefs, dropRef } from "./clips.js?v=21";
 import { DRIVE_URL } from "./drive-url.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
@@ -16,13 +17,22 @@ const store = {
 // 送信先は drive-url.js だけ。URLらしくなければ送信しない（クリップはスマホに残る）。
 const driveUrl = () => (DRIVE_URL.startsWith("https://") ? DRIVE_URL.trim() : "");
 
+// A phone on a weak connection drops a request now and then: try again before giving up, because
+// without refs.json the home screen has nothing to show.
+async function getJson(url, tries = 3) {
+  for (let i = 0; ; i++) {
+    try { return await fetch(url).then(r => r.json()); }
+    catch (e) { if (i >= tries - 1) throw e; await new Promise(r => setTimeout(r, 800 * (i + 1))); }
+  }
+}
+
 // Show any crash on screen: on a phone at the court there is no console to look at.
 const showError = e => { const w = $("warn"); w.style.display = "block"; w.textContent = `エラー: ${e?.message || e}`; };
 addEventListener("error", e => showError(e.error || e.message));
 addEventListener("unhandledrejection", e => showError(e.reason));
 
 let refs = [], ref = null;
-let vision = null, live = null, Pose = null;   // MediaPipe fileset, VIDEO-mode landmarker, class
+let vision = null, live = null, still = null, Pose = null;   // MediaPipe fileset, VIDEO/IMAGE-mode landmarkers, class
 let stream = null, wakeLock = null;
 
 // ---------- small helpers ----------
@@ -223,6 +233,16 @@ async function landmarkers() {
   });
   try { live = await make("VIDEO", "GPU"); } catch { live = await make("VIDEO", "CPU"); }
 }
+// One still frame at a time, for the reference video: the video is seeked frame by frame on the phone.
+async function stillLandmarker() {
+  await landmarkers();
+  if (!still) {
+    const opts = { baseOptions: { modelAssetPath: MODEL($("model").value), delegate: "GPU" }, runningMode: "IMAGE", numPoses: 1 };
+    try { still = await Pose.createFromOptions(vision, opts); }
+    catch { still = await Pose.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "CPU" } }); }
+  }
+  return still;
+}
 function detect(lm, src, ts) {
   let out = null;
   const cb = r => { if (r.landmarks.length) out = asPose(r.landmarks[0]); };
@@ -325,7 +345,9 @@ function openChoose(deg, list) {
       b.oncontextmenu = e => {
         e.preventDefault();
         if (!confirm(`「${r.label}」を削除するのだ？`)) return;
-        dropRef(r);
+        if (r.server) fetch(`/ref/${r.id.replace(/^user_/, "")}/forget`, { method: "POST" }).catch(() => {});
+        else dropRef(r.id).catch(() => {});
+        refs = refs.filter(x => x !== r);
         const list2 = atAngle(deg);
         if (list2.length >= 2) return openChoose(deg, list2);
         pick = { az: deg };                         // 角度は選んだまま、残り1本か0本の表示に戻す
@@ -341,88 +363,57 @@ function openChoose(deg, list) {
 $("chBack").onclick = () => { pick = {}; renderEyes(); renderSheet(); show("home"); };
 
 // お手本を消す（サーバーの一覧からも、この端末の一覧からも）
-function dropRef(r) {
-  if (r.server) fetch(`/ref/${r.id.replace(/^user_/, "")}/forget`, { method: "POST" }).catch(() => {});
-  else store.set("userRefs", store.get("userRefs", []).filter(x => x.id !== r.id));
-  refs = refs.filter(x => x !== r);
-}
-
 function forgetRef(r) {
   if (!confirm(`「${r.label}」を削除するのだ？`)) return;
-  dropRef(r);
+  if (r.server) fetch(`/ref/${r.id.replace(/^user_/, "")}/forget`, { method: "POST" }).catch(() => {});
+  else dropRef(r.id).catch(() => {});
+  refs = refs.filter(x => x !== r);
   pick = {};
   renderEyes(); renderSheet();
 }
 
-// Add a reference from a video file on the phone. The video goes to the PC and the estimation runs
-// there, so the phone can be closed (or put down) while it finishes. The PC finds every serve in the
-// file; the confirmation screen lets you check the skeleton against the video and keep one of them.
+// Add a reference from a video file on the phone. Everything runs here — the pose estimation, the
+// serve search and the save — so the app needs no PC, and the video never leaves the phone. The
+// confirmation screen plays the video with the skeleton and lists every serve found in it.
 // This button is not tied to an angle: clear the one left by an earlier add.
 $("addBtn").onclick = () => { addAz = null; $("addFile").click(); };
 $("addFile").onchange = async e => {
   const file = e.target.files[0]; e.target.value = "";
   if (!file) return;
-  const st = $("addStatus");
-  const wake = await navigator.wakeLock?.request("screen").catch(() => null);   // the upload needs the screen on
+  const st = $("addStatus"), video = URL.createObjectURL(file);
+  // A hidden page stops decoding the video, and the estimation with it: keep the screen on.
+  const wake = await navigator.wakeLock?.request("screen").catch(() => null);
   try {
-    st.textContent = "PCへ送信中… 0%";
-    const id = await uploadRef(file, p => { st.textContent = `PCへ送信中… ${p}%`; });
-    store.set("pendingRefs", [...store.get("pendingRefs", []), id]);
-    $("addFile").value = "";
-    watchRefs();
-  } catch (err) { st.textContent = String(err.message || err); }
+    st.textContent = "骨格推定を準備中…";
+    const lm = await stillLandmarker();
+    const v = document.createElement("video");
+    v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = video;
+    await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error("動画を読めなかったのだ")); });
+    const doc = { fps: 30, width: v.videoWidth, height: v.videoHeight };
+    doc.frames = await poseFrames(v, src => detect(lm, src), {
+      fps: 30,
+      onProgress: p => { st.textContent = `骨格推定中… ${Math.round(p * 100)}%（画面を消さないでほしいのだ）`; },
+      onWait: () => { st.textContent = "画面が消えて止まっているのだ。画面を点けると続きから進むのだ"; },
+    });
+    const serves = serveWindows(doc);
+    if (!serves.length) throw new Error("サーブが見つからなかったのだ。1本のサーブが全身で映っている動画にしてほしいのだ");
+    st.textContent = "";
+    openConfirm({ doc, serves, video, blob: file });
+  } catch (err) { st.textContent = String(err.message || err); URL.revokeObjectURL(video); }
   finally { wake?.release?.(); }
 };
-
-function uploadRef(file, onProgress) {
-  return new Promise((ok, fail) => {
-    const x = new XMLHttpRequest();
-    x.open("POST", "/ref");
-    x.upload.onprogress = e => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
-    x.onload = () => {
-      try { ok(JSON.parse(x.responseText).id); }
-      catch { fail(new Error("PCに送れなかったのだ。PCでサーバーを動かしているか確かめてほしいのだ")); }
-    };
-    x.onerror = () => fail(new Error("PCに届かなかったのだ。PCでサーバーを動かしているか確かめてほしいのだ"));
-    x.send(file);
-  });
-}
-
-// Keep asking the PC about the jobs this phone started, including after the app was closed.
-let watching = 0;
-async function watchRefs() {
-  if (watching) return;
-  watching = 1;
-  try {
-    for (;;) {
-      const ids = store.get("pendingRefs", []);
-      if (!ids.length) { $("addStatus").textContent = ""; return; }
-      for (const id of ids) {
-        const r = await fetch(`/ref/${id}`).then(r => r.json()).catch(() => null);
-        if (!r || r.status === "running") continue;
-        store.set("pendingRefs", store.get("pendingRefs", []).filter(x => x !== id));
-        if (r.status === "done") { openConfirm(id, r); return; }        // one video at a time
-        $("addStatus").textContent = r.message || "推定できなかったのだ";
-      }
-      $("addStatus").textContent = "PCで骨格推定中。スマホを閉じても進むのだ";
-      await new Promise(r => setTimeout(r, 5000));
-    }
-  } finally { watching = 0; }
-}
 
 // ---------- check screen: does the skeleton match the video? ----------
 // Two uses: a video the PC just estimated (pick which serve to keep) and an existing reference
 // (look at it before shooting, and say where the skeleton looks wrong).
 let cf = null, cfLoop = 0, cfStepIx = -1;
 
-async function openConfirm(id, result) {
-  if (!result.serves.length) { $("addStatus").textContent = "サーブが見つからなかったのだ。全身が映った動画にしてほしいのだ"; return; }
-  const doc = await fetch(`/ref/${id}/poses`).then(r => r.json()).catch(() => null);
-  if (!doc) { $("addStatus").textContent = "推定の結果を読めなかったのだ"; return; }
+// The estimation just finished on this phone: check it, then keep one of the serves it found.
+function openConfirm(job) {
   showCheck({
-    mode: "job", id, refId: `user_${id}`, label: "新しいお手本",
-    video: `/ref/${id}/video`, frames: doc.frames, from: 0, step: 1 / doc.fps,
-    serves: result.serves, sel: 0,
+    mode: "job", refId: "new", label: "新しいお手本", doc: job.doc, blob: job.blob, temp: true,
+    video: job.video, frames: job.doc.frames, from: 0, step: 1 / job.doc.fps,
+    serves: job.serves, sel: 0,
   });
 }
 
@@ -448,7 +439,13 @@ function showCheck(state) {
   show("confirm");
   const lid = ++cfLoop;
   drawConfirm();
-  if (cf.video) v.onloadeddata = () => { cfPlay(); everyFrame(v, () => cfLoop === lid, drawConfirm); };
+  if (cf.video) {
+    // A reference video comes over the network (a few MB): say it is on its way instead of showing a
+    // black stage, and say so if it never arrives.
+    $("cfInfo").textContent = "動画を読み込み中…";
+    v.onerror = () => { $("cfInfo").textContent = "動画を読めなかったのだ。通信が弱いかもしれないから、もう一度開いてほしいのだ"; };
+    v.onloadeddata = () => { cfPlay(); everyFrame(v, () => cfLoop === lid, drawConfirm); };
+  }
 }
 
 function cfServes() {
@@ -487,7 +484,6 @@ const cfFrame = () => {
 function drawConfirm() {
   if (!cf?.frames) return;
   const v = $("cfV"), g = fitCanvas($("cfOv"));
-  if (cf.video && !v.videoWidth) return;            // still loading: keep the stage clear
   const w = cfWin();
   if (w && !v.paused && v.currentTime > w.to * cf.step + 0.4) cfPlay();
   const pose = cf.frames[cfFrame()];
@@ -504,7 +500,7 @@ $("cfV").onclick = () => {
   v.paused ? (v.play().catch(() => {}), $("cfPlayBtn").textContent = "一時停止", $("cfInfo").textContent = cf.info)
            : (v.pause(), $("cfPlayBtn").textContent = "再生");
 };
-$("cfBack").onclick = () => { closeConfirm(); show("home"); watchRefs(); };
+$("cfBack").onclick = () => { closeConfirm(); show("home"); };
 
 // One tap = one frame, holding keeps stepping. A lagging skeleton only shows when the frame stops.
 function cfStepFrame(dir) {
@@ -529,18 +525,17 @@ $("cfPlayBtn").onclick = () => {
 };
 $("cfRate").onchange = () => { $("cfV").playbackRate = +$("cfRate").value; };
 
-// "This bit is wrong": a note with the frame and the words, kept on the PC for a correction.
-$("cfComment").onclick = async () => {
+// "This bit is wrong": a note with the frame and the words, kept on the phone. The local server also
+// gets a copy when it is there, for a later correction on the PC.
+$("cfComment").onclick = () => {
   const what = prompt("どこが変？ 直してほしいところを書いてほしいのだ", "");
   if (!what) return;
   const v = $("cfV");
-  try {
-    const r = await fetch("/fix", { method: "POST", body: JSON.stringify({
-      refId: cf.refId, label: cf.label, frame: cfFrame(), time: +(v.currentTime || 0).toFixed(2), comment: what }) });
-    if (!r.ok) throw new Error("コメントを送れなかったのだ");
-    cf.comments++;
-    $("cfInfo").textContent = `コメントを送ったのだ（${cf.comments}件）`;
-  } catch (err) { $("cfInfo").textContent = String(err.message || err); }
+  const note = { refId: cf.refId, label: cf.label, frame: cfFrame(), time: +(v.currentTime || 0).toFixed(2), comment: what, at: new Date().toISOString() };
+  store.set("fixes", [...store.get("fixes", []), note]);
+  fetch("/fix", { method: "POST", body: JSON.stringify(note) }).catch(() => {});
+  cf.comments++;
+  $("cfInfo").textContent = `コメントを書いたのだ（${cf.comments}件）`;
 };
 
 $("cfSave").onclick = async () => {
@@ -551,12 +546,13 @@ $("cfSave").onclick = async () => {
   if (azimuth === null) return;
   const b = $("cfSave"); b.disabled = true;
   try {
-    const r = await fetch(`/ref/${cf.id}/accept`, { method: "POST", body: JSON.stringify({ serve: cf.sel, label: label || `サーブ${cf.sel + 1}本目`, azimuth }) });
-    if (!r.ok) throw new Error("保存できなかったのだ");
-    const entry = await r.json();
+    const id = `user_${Date.now()}`;
+    const r = { ...reference(cf.doc, cf.serves[cf.sel], { id, label: label || `サーブ${cf.sel + 1}本目` }), azimuth, server: false };
+    await putRef(r, cf.blob);                                     // 端末の中に、角度と動画ごと残す
+    const entry = { ...r, video: URL.createObjectURL(cf.blob) };  // the video stays on the phone for "並べる"
     refs.push(entry);
     addAz = null;
-    pick = { az: azimuth, ref: entry };               // ホームのその角度に並べる
+    pick = { az: azimuth, ref: entry };                           // ホームのその角度に並べる
     renderEyes(); renderSheet();
     $("addStatus").textContent = "お手本を追加したのだ";
     closeConfirm(); show("home");
@@ -594,6 +590,7 @@ function closeConfirm() {
   cfLoop++;
   cfStepIx = -1;
   const v = $("cfV"); v.pause(); v.removeAttribute("src"); v.load();
+  if (cf?.temp) URL.revokeObjectURL(cf.video);      // the blob is what gets saved, not this URL
   cf = null;
 }
 
@@ -975,14 +972,15 @@ $("again").onclick = () => { closeReview(); startShoot(ref); };
 
 // ---------- start ----------
 // Fixed: front camera, accurate (full) model, no voice, recording starts on hands-up, always review.
-const builtIn = await fetch("refs.json").then(r => r.json()).then(d => d.refs);
-const onPc = await fetch("refs_user.json").then(r => r.json()).then(d => d.refs).catch(() => []);
-refs = [...builtIn, ...onPc, ...store.get("userRefs", [])];
+const builtIn = await getJson("refs.json").then(d => d.refs);
+const onPc = await getJson("refs_user.json").then(d => d.refs).catch(() => []);
+// References added on this phone, with their video files, straight from IndexedDB.
+const mine = await allRefs().catch(() => []).then(rows => rows.map(({ video, ...r }) => ({ ...r, video: video ? URL.createObjectURL(video) : "" })));
+refs = [...builtIn, ...onPc, ...store.get("userRefs", []), ...mine];
 renderEyes();
 renderSheet();
-watchRefs();
 uploadClips();
 
-// ?confirm=<job id> opens a finished job straight away (for checking the screen on a PC).
-const job = new URLSearchParams(location.search).get("confirm");
-if (job) fetch(`/ref/${job}`).then(r => r.json()).then(r => r.status === "done" && openConfirm(job, r));
+// Keep the app on the phone so it opens with no connection (the reference videos still need one).
+// A browser only allows this on https or localhost, so a plain http server just skips it.
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
