@@ -6,26 +6,55 @@
 <meta name="theme-color" content="#111111">
 <title>サーブ撮影</title>
 <style>
-  :root { color-scheme: dark; --bg:#111; --panel:#1c1c1c; --fg:#f2f2f2; --mut:#9a9a9a; --acc:#3fa9ff; --ok:#4cd964; --you:#ffd60a; --ref:#5ce1e6; --line:#ff453a; }
+  :root { color-scheme: dark; --bg:#000; --panel:#16171b; --fg:#f2f2f2; --mut:#9aa0a6; --acc:#4d9fff; --ok:#4cd964; --you:#ffd60a; --ref:#5ce1e6; --line:#ff453a; }
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
   button, select, input[type=range] { font:inherit; }
   button { border:0; border-radius:12px; padding:12px 16px; background:var(--panel); color:var(--fg); }
-  button.step { touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; min-width:56px; }
+  button.step { touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; min-width:48px; }
   button.primary { background:var(--acc); color:#000; font-weight:600; }
   .screen { display:none; height:100%; }
   .screen.on { display:flex; flex-direction:column; }
-  /* home */
-  #home { padding:16px; gap:12px; overflow:auto; }
-  #home h1 { margin:0; font-size:22px; }
-  #home p { margin:0; color:var(--mut); font-size:14px; }
-  #refs { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
+  .chip { background:#00000080; color:#fff; font-size:13px; padding:8px 14px; border-radius:999px; }
+  /* home: half court from above, the angles to shoot from around the server */
+  #home { padding:0; overflow:auto; }
+  #home .caption { padding:16px 18px 4px; color:var(--mut); font-size:13px; letter-spacing:.2px; }
+  #courtWrap { flex:1; min-height:0; padding:2px 10px 0; }
+  #courtWrap > svg { width:100%; height:100%; display:block; }
+  .court { fill:#1c3a34; stroke:#cfe3df; stroke-opacity:.5; }
+  .cl { stroke:#cfe3df; stroke-opacity:.55; stroke-width:1.1; }
+  .net { stroke:#e8f0ee; stroke-width:3; }
+  .post { stroke:#e8f0ee; stroke-width:3; }
+  .orbit { fill:none; stroke:#5b636b; stroke-opacity:.35; stroke-width:1; stroke-dasharray:3 5; }
+  .eye { cursor:pointer; }
+  .eye .halo { fill:none; }
+  .eye circle.bg { fill:#14171b; stroke:#4a525b; stroke-width:1.5; }
+  .eye .ball { fill:none; stroke:#c3ccd4; stroke-width:1.6; }
+  .eye .pupil { fill:#c3ccd4; }
+  .eye .lbl { fill:#8b929a; font-size:9px; font-family:system-ui; }
+  .eye.sel circle.bg { fill:var(--acc); stroke:#a9d0ff; }
+  .eye.sel .ball { stroke:#06111f; }
+  .eye.sel .pupil { fill:#06111f; }
+  .eye.sel .lbl { fill:#8fc2ff; }
+  .eye.sel .halo { fill:none; stroke:var(--acc); stroke-opacity:.35; stroke-width:2; }
+  .eye.none circle.bg { fill:#0f1114; stroke:#333a41; }
+  #sheet { background:var(--panel); border-radius:22px 22px 0 0; padding:12px 18px 18px; text-align:center; display:flex; flex-direction:column; gap:6px; }
+  #sheet .grab { width:36px; height:4px; background:#3a3d44; border-radius:2px; margin:0 auto 6px; }
+  #sheet .sel { font-size:20px; font-weight:700; }
+  #sheet .ask { color:var(--mut); font-size:14px; }
+  #sheet .refname { font-weight:600; }
+  #sheet .go { width:100%; background:var(--acc); color:#fff; border-radius:14px; padding:14px; font-size:15px; font-weight:700; margin-top:6px; }
+  #home .foot { padding:8px 18px max(12px, env(safe-area-inset-bottom)); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #addBtn { padding:8px 12px; font-size:13px; }
+  #addStatus, #clipInfo { color:var(--mut); font-size:13px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  /* どちらのサーブにする？ */
+  #choose { padding:14px 0 0; overflow:auto; }
+  #choose h2 { margin:8px 18px 12px; font-size:18px; }
+  #chList { display:flex; flex-direction:column; gap:10px; padding:0 16px 20px; }
   .card { background:var(--panel); border-radius:12px; padding:8px; text-align:left; display:flex; flex-direction:column; gap:4px; }
   .card canvas { width:100%; aspect-ratio:16/9; background:#000; border-radius:8px; }
-  .card b { font-size:15px; } .card small { color:var(--mut); }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  #addStatus { color:var(--mut); font-size:14px; }
-  #cfServes button { padding:8px 12px; }
+  .card b { font-size:15px; }
   /* camera + review */
   .stage { position:relative; flex:1; min-height:0; background:#000; }
   .stage video, .stage canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
@@ -39,22 +68,47 @@
   .hud { position:absolute; left:0; right:0; padding:10px 12px; display:flex; gap:8px; align-items:center; pointer-events:none; }
   .hud > * { pointer-events:auto; }
   .hud.top { top:0; background:linear-gradient(#000c, #0000); }
-  .hud.bottom { bottom:0; background:linear-gradient(#0000, #000c); justify-content:center; padding-bottom:max(12px, env(safe-area-inset-bottom)); }
-  .badge { font-weight:700; font-size:20px; min-width:64px; text-align:center; border-radius:10px; padding:4px 8px; background:#000a; }
-  .badge.ok { background:var(--ok); color:#000; }
-  #say { flex:1; font-size:18px; font-weight:600; text-shadow:0 1px 3px #000; }
-  #rec { width:72px; height:72px; border-radius:50%; background:#fff; border:6px solid #fff8; padding:0; }
-  #rec.on { background:var(--line); }
+  .hud.bottom { bottom:0; background:linear-gradient(#0000, #000c); }
   .legend { font-size:13px; color:var(--mut); }
-  .legend i { font-style:normal; } .you { color:var(--you); } .ref { color:var(--ref); } .ln { color:var(--line); }
-  #warn { position:absolute; inset:auto 12px 100px 12px; text-align:center; background:#000c; border-radius:10px; padding:8px; display:none; }
+  /* shoot: the camera fills the screen, only the angle and the record button on top of it */
+  #shoot .hud.top { justify-content:flex-end; }
+  #finish { padding:6px 12px; font-size:12px; background:#00000080; color:#fff; border-radius:999px; }
+  .angleok { display:none; background:#00000080; color:var(--acc); font-size:13px; font-weight:700; padding:6px 12px; border-radius:999px; }
+  .angleok.on { display:block; }
+  #say { position:absolute; left:0; right:0; bottom:104px; text-align:center; color:#fff; font-size:13px; text-shadow:0 1px 5px #000; pointer-events:none; }
+  #shoot .hud.bottom { display:grid; grid-template-columns:1fr auto 1fr; gap:12px; padding:0 18px max(26px, env(safe-area-inset-bottom)); background:linear-gradient(#0000, #000b); }
+  #shootBack { justify-self:start; width:48px; height:48px; border-radius:50%; padding:0; background:#ffffff22; border:1px solid #ffffff66; font-size:18px; color:#fff; }
+  #rec { justify-self:center; width:70px; height:70px; border-radius:50%; background:#ffffff22; border:2px solid #fff; padding:0; }
+  #rec.on { background:var(--line); border-color:#ffffff88; }
+  #recInfo { justify-self:end; color:#fff; font-size:12px; }
+  #warn { position:absolute; inset:auto 12px 140px 12px; text-align:center; background:#000c; border-radius:10px; padding:8px; display:none; }
+  /* review: thin timeline under the stage, the controls at the bottom */
+  #review .hud.top { gap:8px; }
+  .seg { display:flex; background:#00000080; border-radius:999px; padding:2px; margin:0 auto; }
+  .seg button { background:none; padding:4px 10px; border-radius:999px; font-size:12px; color:var(--mut); }
+  .seg button.on { background:#fff; color:#000; font-weight:600; }
+  #rvTime { margin-left:auto; }
+  .scrub { padding:0 14px 2px; background:#000; }
+  .scrub .bar { height:3px; background:#ffffff2e; border-radius:2px; position:relative; overflow:hidden; }
+  .scrub .bar i { position:absolute; left:0; top:0; bottom:0; width:0; background:#fff; border-radius:2px; }
+  #review .controls { display:flex; flex-direction:column; gap:8px; padding:10px 14px max(18px, env(safe-area-inset-bottom)); background:#000; }
+  #play { min-width:86px; border-radius:999px; background:#fff; color:#000; font-weight:700; }
+  #again { margin-left:auto; }
+  #rvInfo, #rvMemo { flex-basis:100%; text-align:center; }
   /* memo sheet: what you were watching for, and the note at the end of practice */
   #memo { position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center; padding:16px; background:#000c; }
   #memo.on { display:flex; }
   #memo .box { width:min(520px, 100%); background:var(--panel); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:10px; }
   #memo h2 { margin:0; font-size:17px; }
   #memo textarea { width:100%; min-height:120px; padding:10px; border:1px solid #444; border-radius:10px; background:#111; color:var(--fg); font:inherit; resize:vertical; }
-  #rvMemo { flex-basis:100%; text-align:center; }
+  /* which angle was the added video shot from? */
+  #anglePick { position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center; padding:16px; background:#000c; }
+  #anglePick.on { display:flex; }
+  #anglePick .box { width:min(520px, 100%); background:var(--panel); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:10px; }
+  #anglePick h2 { margin:0; font-size:17px; }
+  #apList { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+  #apList button { padding:10px 6px; font-size:14px; }
+  #apList button.on { background:var(--acc); color:#000; font-weight:600; }
   /* the figure made when a serve is favourited: your serve beside the pro's, at contact */
   #fig { position:fixed; inset:0; z-index:11; display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:12px; background:#000e; }
   #fig.on { display:flex; }
@@ -66,25 +120,49 @@
 <body>
 
 <section id="home" class="screen on">
-  <h1>サーブ撮影</h1>
-  <p>お手本の角度を選ぶと、カメラの映像にお手本のコートの線（赤）と構え（水色）が重なるのだ。スマホは横向きで三脚に固定してほしいのだ。内カメなら、構えた位置から画面を見ながら合わせられるのだ（映像は鏡にせず、録画と同じ向きで出すのだ）。サーブ位置で両手を頭より上に上げて1秒止める（バンザイ。上げたまま振ってもいい）と録画が始まるのだ。</p>
-  <div id="refs"></div>
-  <div class="row">
-    <label class="row"><button id="addBtn">お手本を動画から追加</button><input id="addFile" type="file" accept="video/*" hidden></label>
+  <div class="caption">撮る角度を選ぶ</div>
+  <div id="courtWrap">
+    <svg id="court" viewBox="0 0 320 444" preserveAspectRatio="xMidYMid meet" role="img" aria-label="コートを上から見た角度選び">
+      <!-- コート半面: ネットが上、ベースラインが下 -->
+      <rect class="court" x="50" y="60" width="220" height="260" rx="6"/>
+      <line class="cl" x1="64" y1="60" x2="64" y2="320"/>
+      <line class="cl" x1="256" y1="60" x2="256" y2="320"/>
+      <line class="cl" x1="64" y1="190" x2="256" y2="190"/>
+      <line class="cl" x1="160" y1="60" x2="160" y2="190"/>
+      <line class="cl" x1="160" y1="320" x2="160" y2="332"/>
+      <!-- ネット -->
+      <line class="net" x1="42" y1="60" x2="278" y2="60"/>
+      <line class="post" x1="42" y1="50" x2="42" y2="70"/>
+      <line class="post" x1="278" y1="50" x2="278" y2="70"/>
+      <!-- カメラの軌道 -->
+      <circle class="orbit" cx="185" cy="300" r="105"/>
+      <!-- サーバー（デュース側のベースライン） -->
+      <g transform="translate(185,300)">
+        <ellipse cx="0" cy="9" rx="13" ry="8" fill="#f2f2f2" opacity=".85"/>
+        <circle cx="0" cy="0" r="7" fill="#f2f2f2"/>
+        <g transform="translate(4,1) rotate(-40)" stroke="#f2f2f2" stroke-width="2" fill="none" stroke-linecap="round">
+          <line x1="0" y1="0" x2="0" y2="-15"/>
+          <line x1="0" y1="-15" x2="-3" y2="-20"/>
+          <line x1="0" y1="-15" x2="3" y2="-20"/>
+          <ellipse cx="0" cy="-28" rx="6.5" ry="9"/>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <div id="sheet"></div>
+  <div class="foot">
+    <button id="addBtn">＋ お手本を動画から追加</button>
+    <input id="addFile" type="file" accept="video/*" hidden>
     <span id="addStatus"></span>
-  </div>
-  <div class="row">
     <button id="sendBtn" hidden>Driveへ送る</button>
-    <span id="clipInfo" class="legend"></span>
+    <span id="clipInfo"></span>
   </div>
-  <div class="row legend">
-    <label>カメラ <select id="facing"><option value="environment">背面</option><option value="user">内カメ</option></select></label>
-    <label>骨格推定 <select id="model"><option value="lite">速い（lite）</option><option value="full">正確（full）</option></select></label>
-    <label><input id="voice" type="checkbox" checked> 音声で指示</label>
-    <label><input id="cont" type="checkbox"> 見返さずに次を待つ</label>
-    <label>録画開始 <select id="start"><option value="handsUp">両手を上げたら</option><option value="aligned">角度が合ったら</option><option value="manual">ボタンだけ</option></select></label>
-  </div>
-  <p class="legend">お手本はYouTube「【ソフトテニス】力を抜いた理想のフォーム！爆音サーブをスローモーション徹底分析！」の映像を使用しているのだ。</p>
+</section>
+
+<section id="choose" class="screen">
+  <div><button id="chBack" class="chip">‹ 戻る</button></div>
+  <h2>どちらのサーブにする？</h2>
+  <div id="chList"></div>
 </section>
 
 <section id="shoot" class="screen">
@@ -92,17 +170,14 @@
     <video id="cam" playsinline muted></video>
     <canvas id="camOv"></canvas>
     <div class="hud top">
-      <button id="shootBack">←</button>
-      <button id="flip" aria-label="カメラ切り替え">⇄</button>
-      <span id="score" class="badge">--</span>
-      <span id="say">起動中…</span>
-      <button id="finish">練習を終える</button>
+      <span id="angleOk" class="angleok">✓ 角度OK</span>
     </div>
     <div id="warn"></div>
+    <div id="say">起動中…</div>
     <div class="hud bottom">
-      <span class="legend"><i class="you">■あなた</i> <i class="ref">■お手本</i> <i class="ln">■コート線</i></span>
+      <button id="shootBack" aria-label="やめる">✕</button>
       <button id="rec" aria-label="録画"></button>
-      <span id="recInfo" class="legend"></span>
+      <span id="recInfo"></span>
     </div>
   </div>
 </section>
@@ -113,19 +188,28 @@
     <video id="refV" playsinline muted preload="auto"></video>
     <canvas id="rvOv"></canvas>
     <div class="hud top">
-      <button id="reviewBack">←</button>
-      <span id="rvInfo" class="legend"></span>
+      <button id="finish" class="chip">練習を終える</button>
+      <div class="seg" id="viewSeg">
+        <button data-view="overlay" class="on">重ねる</button>
+        <button data-view="side">並べる</button>
+      </div>
+      <span id="rvTime" class="chip">0:00</span>
+      <select id="view" hidden><option value="overlay">重ねる</option><option value="side">並べる</option></select>
     </div>
-    <div class="hud bottom row">
+  </div>
+  <div class="scrub"><div class="bar"><i id="rvBar"></i></div></div>
+  <div class="controls">
+    <div class="row">
       <button id="back" class="step" aria-label="コマ戻し">◀</button>
-      <button id="play" class="primary">再生</button>
+      <button id="play">再生</button>
       <button id="fwd" class="step" aria-label="コマ送り">▶</button>
       <select id="rate"><option value="0.25">1/4倍</option><option value="0.125">1/8倍</option><option value="0.5">1/2倍</option><option value="1">等倍</option></select>
-      <select id="view"><option value="overlay">重ねる</option><option value="side">並べる</option></select>
-      <label class="legend">ずらす <input id="offset" type="range" min="-1" max="1" step="0.02" value="0"></label>
       <button id="fav">☆ お気に入り</button>
-      <span id="rvMemo" class="legend"></span>
       <button id="again" class="primary">次を撮る</button>
+    </div>
+    <div class="row">
+      <span id="rvInfo" class="legend"></span>
+      <span id="rvMemo" class="legend"></span>
     </div>
   </div>
 </section>
@@ -138,7 +222,7 @@
       <button id="cfBack">←</button>
       <span id="cfInfo" class="legend"></span>
     </div>
-    <div class="hud bottom row">
+    <div class="hud bottom row" style="justify-content:center">
       <span id="cfServes" class="row"></span>
       <button id="cfPrev" class="step" aria-label="コマ戻し">◀</button>
       <button id="cfPlayBtn" class="primary">再生</button>
@@ -161,12 +245,23 @@
   </div>
 </div>
 
+<div id="anglePick">
+  <div class="box">
+    <h2>どの角度から撮った動画？</h2>
+    <div id="apList"></div>
+    <div class="row">
+      <button id="apCancel">やめる</button>
+      <button id="apOk" class="primary">この角度で保存</button>
+    </div>
+  </div>
+</div>
+
 <div id="fig">
   <canvas id="figCv"></canvas>
   <span id="figNote"></span>
   <button id="figClose" class="primary">閉じる</button>
 </div>
 
-<script type="module" src="app.js?v=17"></script>
+<script type="module" src="app.js?v=20"></script>
 </body>
 </html>

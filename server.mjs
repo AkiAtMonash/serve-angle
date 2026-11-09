@@ -34,8 +34,10 @@ async function sendFile(req, res, path, type) {
   const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
   const from = m?.[1] ? +m[1] : 0;
   const to = m?.[2] ? Math.min(+m[2], size - 1) : size - 1;
-  if (m) res.writeHead(206, { "content-type": type, "content-length": to - from + 1, "accept-ranges": "bytes", "content-range": `bytes ${from}-${to}/${size}` });
-  else res.writeHead(200, { "content-type": type, "content-length": size, "accept-ranges": "bytes" });
+  // HTML and JS change often: make the browser revalidate so an installed home-screen shortcut gets the newest code.
+  const fresh = type.includes("text/html") || type.includes("javascript") ? { "cache-control": "no-cache" } : {};
+  if (m) res.writeHead(206, { "content-type": type, "content-length": to - from + 1, "accept-ranges": "bytes", "content-range": `bytes ${from}-${to}/${size}`, ...fresh });
+  else res.writeHead(200, { "content-type": type, "content-length": size, "accept-ranges": "bytes", ...fresh });
   createReadStream(path, { start: from, end: to }).pipe(res);
 }
 
@@ -74,12 +76,12 @@ async function newRef(req, res) {
 }
 
 async function acceptRef(req, res, id) {
-  const { serve = 0, label = "" } = JSON.parse(String(await body(req)) || "{}");
+  const { serve = 0, label = "", azimuth = 0 } = JSON.parse(String(await body(req)) || "{}");
   const dir = jobDir(id);
   const doc = JSON.parse(await readFile(join(dir, "poses.json"), "utf8"));
   const win = serveWindows(doc)[serve];
   if (!win) return send(res, 404, "no such serve");
-  const entry = { ...reference(doc, win, { id: `user_${id}`, label: label || "自分のお手本" }), video: `/ref/${id}/video` };
+  const entry = { ...reference(doc, win, { id: `user_${id}`, label: label || "自分のお手本" }), azimuth: Number(azimuth) || 0, video: `/ref/${id}/video` };
   const file = join(WORK, "refs_user.json"), list = await readFile(file, "utf8").then(JSON.parse).catch(() => ({ refs: [] }));
   list.refs = list.refs.filter(r => r.id !== entry.id).concat(entry);
   await writeFile(file, JSON.stringify(list));

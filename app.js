@@ -28,14 +28,6 @@ let stream = null, wakeLock = null;
 // ---------- small helpers ----------
 function show(id) { for (const s of document.querySelectorAll(".screen")) s.classList.toggle("on", s.id === id); }
 
-function say(text) {
-  if (!$("voice").checked || !("speechSynthesis" in window)) return;
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "ja-JP";
-  speechSynthesis.speak(u);
-}
-
 // ---------- memo sheet ----------
 // The two notes this app keeps: what a favourite was watching for, and the note left when practice
 // ends. "保存" with an empty box is allowed, so a favourite does not need words.
@@ -227,7 +219,7 @@ async function landmarkers() {
   Pose = PoseLandmarker;
   vision ??= await FilesetResolver.forVisionTasks(`${MP}/wasm`);
   const make = async (mode, delegate) => PoseLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath: MODEL($("model").value), delegate }, runningMode: mode, numPoses: 1,
+    baseOptions: { modelAssetPath: MODEL("full"), delegate }, runningMode: mode, numPoses: 1,
   });
   try { live = await make("VIDEO", "GPU"); } catch { live = await make("VIDEO", "CPU"); }
 }
@@ -238,7 +230,24 @@ function detect(lm, src, ts) {
   return out;
 }
 
-// ---------- home ----------
+// ---------- home: pick the angle on the half court ----------
+// Seven angles around the server. 0 (front) is not offered: the phone would sit where you serve from.
+const ANGLES = [
+  { deg: 45, name: "右前" }, { deg: 90, name: "右" }, { deg: 135, name: "右後ろ" },
+  { deg: 180, name: "真後ろ" }, { deg: 225, name: "左後ろ" }, { deg: 270, name: "左" },
+  { deg: 315, name: "左前" },
+];
+const AZ = { cx: 185, cy: 300, r: 105 };          // サーバー（頭の中心）と、目のアイコンの軌道半径
+const azPos = deg => [
+  Math.round(AZ.cx + AZ.r * Math.sin(deg * Math.PI / 180)),
+  Math.round(AZ.cy - AZ.r * Math.cos(deg * Math.PI / 180)),
+];
+const atAngle = deg => refs.filter(r => +r.azimuth === deg);
+const angleName = deg => ANGLES.find(a => a.deg === deg)?.name ?? "";
+
+let pick = {};          // { az }: the angle chosen on the court, { az, ref }: the serve chosen at that angle
+let addAz = null;       // the angle a reference video was added from (pre-selected in the picker)
+
 function thumb(cv, r) {
   const g = cv.getContext("2d"); cv.width = 320; cv.height = 180;
   g.fillStyle = "#000"; g.fillRect(0, 0, 320, 180);
@@ -248,34 +257,108 @@ function thumb(cv, r) {
   drawBones(g, toCanvas(r.frames[r.stance], rr), COL.ref, 1);
 }
 
-function renderHome() {
-  const box = $("refs"); box.innerHTML = "";
-  for (const r of refs) {
+function renderEyes() {
+  const svg = $("court");
+  for (const g of svg.querySelectorAll("g.eye")) g.remove();
+  for (const a of ANGLES) {
+    const [x, y] = azPos(a.deg);
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", `eye${atAngle(a.deg).length ? "" : " none"}${pick.az === a.deg ? " sel" : ""}`);
+    g.setAttribute("transform", `translate(${x},${y})`);
+    g.innerHTML = `<circle class="halo" r="23"/><circle class="bg" r="15"/><ellipse class="ball" rx="7.5" ry="4.8"/><circle class="pupil" r="2.6"/><text class="lbl" y="28" text-anchor="middle">${a.name}</text>`;
+    g.dataset.az = a.deg;
+    svg.append(g);
+  }
+}
+$("court").onclick = e => {
+  const g = e.target.closest("g.eye");
+  if (g) pickAngle(+g.dataset.az);
+};
+
+// The sheet under the court says what the chosen angle can do: nothing yet, one serve, or two to pick from.
+function renderSheet() {
+  const box = $("sheet"); box.innerHTML = "";
+  const add = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; el.textContent = text; box.append(el); return el; };
+  add("div", "grab", "");
+  if (!pick.az) { add("div", "ask", "コートの目のアイコンで、撮る角度を選ぶのだ"); return; }
+  add("div", "sel", `${angleName(pick.az)}から`);
+  const list = atAngle(pick.az);
+  if (!list.length) {
+    add("div", "ask", "この角度の動画はまだ無いのだ");
+    const b = add("button", "go", "この角度で動画を追加");
+    b.onclick = () => { addAz = pick.az; $("addFile").click(); };
+    return;
+  }
+  const r = pick.ref || (list.length === 1 ? list[0] : null);
+  if (!r) {
+    add("div", "ask", `この角度のお手本は${list.length}本あるのだ`);
+    const b = add("button", "go", "どちらのサーブにする？");
+    b.onclick = () => openChoose(pick.az, list);
+    return;
+  }
+  add("div", "ask", "この角度から撮る？");
+  const name = add("div", "refname", r.label);
+  if (r.user) name.oncontextmenu = e => { e.preventDefault(); forgetRef(r); };   // 長押しで削除
+  const b = add("button", "go", "この角度で撮る");
+  b.onclick = () => startShoot(r);
+}
+
+function pickAngle(deg) {
+  pick = { az: deg };
+  const list = atAngle(deg);
+  renderEyes(); renderSheet();
+  if (list.length >= 2) openChoose(deg, list);
+}
+
+// どちらのサーブにする？: the serves kept at one angle, thumbnail and label.
+function openChoose(deg, list) {
+  const box = $("chList"); box.innerHTML = "";
+  for (const r of list) {
     const b = document.createElement("button"); b.className = "card";
     const cv = document.createElement("canvas"); thumb(cv, r);
     const t = document.createElement("b"); t.textContent = r.label;
-    const s = document.createElement("small"); s.textContent = r.user ? "自分で追加" : `動画の${r.at}から`;
-    b.append(cv, t, s);
-    b.onclick = () => openCheck(r);      // look at the skeleton over the video before shooting
-    box.append(b);
-    if (r.user) {
+    b.append(cv, t);
+    if (r.user) {                                   // 自分で足したお手本だけ、長押しで消せる
       const del = document.createElement("small"); del.textContent = "長押しで削除";
+      del.style.color = "var(--mut)";
       b.append(del);
       b.oncontextmenu = e => {
         e.preventDefault();
         if (!confirm(`「${r.label}」を削除するのだ？`)) return;
-        if (r.server) fetch(`/ref/${r.id.replace(/^user_/, "")}/forget`, { method: "POST" }).catch(() => {});
-        else store.set("userRefs", store.get("userRefs", []).filter(x => x.id !== r.id));
-        refs = refs.filter(x => x !== r); renderHome();
+        dropRef(r);
+        const list2 = atAngle(deg);
+        if (list2.length >= 2) return openChoose(deg, list2);
+        pick = { az: deg };                         // 角度は選んだまま、残り1本か0本の表示に戻す
+        renderEyes(); renderSheet();
+        show("home");
       };
     }
+    b.onclick = () => { pick = { az: deg, ref: r }; renderEyes(); renderSheet(); show("home"); };
+    box.append(b);
   }
+  show("choose");
+}
+$("chBack").onclick = () => { pick = {}; renderEyes(); renderSheet(); show("home"); };
+
+// お手本を消す（サーバーの一覧からも、この端末の一覧からも）
+function dropRef(r) {
+  if (r.server) fetch(`/ref/${r.id.replace(/^user_/, "")}/forget`, { method: "POST" }).catch(() => {});
+  else store.set("userRefs", store.get("userRefs", []).filter(x => x.id !== r.id));
+  refs = refs.filter(x => x !== r);
+}
+
+function forgetRef(r) {
+  if (!confirm(`「${r.label}」を削除するのだ？`)) return;
+  dropRef(r);
+  pick = {};
+  renderEyes(); renderSheet();
 }
 
 // Add a reference from a video file on the phone. The video goes to the PC and the estimation runs
 // there, so the phone can be closed (or put down) while it finishes. The PC finds every serve in the
 // file; the confirmation screen lets you check the skeleton against the video and keep one of them.
-$("addBtn").onclick = () => $("addFile").click();
+// This button is not tied to an angle: clear the one left by an earlier add.
+$("addBtn").onclick = () => { addAz = null; $("addFile").click(); };
 $("addFile").onchange = async e => {
   const file = e.target.files[0]; e.target.value = "";
   if (!file) return;
@@ -464,16 +547,48 @@ $("cfSave").onclick = async () => {
   if (cf.mode === "ref") { const r = cf.ref; closeConfirm(); startShoot(r); return; }
   const label = prompt("お手本の名前は？", `サーブ${cf.sel + 1}本目`);
   if (label === null) return;
+  const azimuth = await askAngle(addAz);              // どの角度から撮った動画？
+  if (azimuth === null) return;
   const b = $("cfSave"); b.disabled = true;
   try {
-    const r = await fetch(`/ref/${cf.id}/accept`, { method: "POST", body: JSON.stringify({ serve: cf.sel, label: label || `サーブ${cf.sel + 1}本目` }) });
+    const r = await fetch(`/ref/${cf.id}/accept`, { method: "POST", body: JSON.stringify({ serve: cf.sel, label: label || `サーブ${cf.sel + 1}本目`, azimuth }) });
     if (!r.ok) throw new Error("保存できなかったのだ");
-    refs.push(await r.json()); renderHome();
+    const entry = await r.json();
+    refs.push(entry);
+    addAz = null;
+    pick = { az: azimuth, ref: entry };               // ホームのその角度に並べる
+    renderEyes(); renderSheet();
     $("addStatus").textContent = "お手本を追加したのだ";
     closeConfirm(); show("home");
   } catch (err) { $("addStatus").textContent = String(err.message || err); }
   finally { b.disabled = false; }
 };
+
+// ---------- angle picker: which angle was the added video shot from? ----------
+let apSel = 90, apDone = null;
+function renderAp() {
+  const box = $("apList"); box.innerHTML = "";
+  for (const a of ANGLES) {
+    const b = document.createElement("button");
+    b.textContent = a.name;
+    b.className = a.deg === apSel ? "on" : "";
+    b.onclick = () => { apSel = a.deg; renderAp(); };
+    box.append(b);
+  }
+}
+function askAngle(initial) {
+  apSel = initial || 90;
+  renderAp();
+  $("anglePick").classList.add("on");
+  return new Promise(res => { apDone = res; });
+}
+function closeAngle(v) {
+  $("anglePick").classList.remove("on");
+  const done = apDone; apDone = null;
+  done?.(v);                                          // null = やめる
+}
+$("apOk").onclick = () => closeAngle(apSel);
+$("apCancel").onclick = () => closeAngle(null);
 
 function closeConfirm() {
   cfLoop++;
@@ -502,17 +617,18 @@ function liveDetect(src, ts) {
 async function startShoot(r) {
   ref = r; show("shoot");
   resetLive();
+  $("angleOk").classList.remove("on");
   $("say").textContent = "カメラと骨格推定を準備中…";
   try {
     // ?src=<video url> feeds a video file instead of the camera (for testing on a PC); ?srcUser= for the front camera
     const q = new URLSearchParams(location.search);
-    const src = ($("facing").value === "user" && q.get("srcUser")) || q.get("src");
+    const src = q.get("srcUser") || q.get("src");
     if (src && !stream) {
       const fake = document.createElement("video"); fake.src = src; fake.muted = true; fake.loop = true; fake.playsInline = true;
       await fake.play(); stream = fake.captureStream();
     }
     stream ??= await navigator.mediaDevices.getUserMedia({
-      audio: false, video: { facingMode: { ideal: $("facing").value }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
+      audio: false, video: { facingMode: { ideal: "user" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
     });
   } catch (err) { $("say").textContent = `カメラを使えなかったのだ（${err.name}）`; return; }
   const cam = $("cam"); cam.srcObject = stream; await cam.play();
@@ -538,7 +654,7 @@ function everyFrame(video, alive, fn) {
 
 function shootFrame() {
   const cam = $("cam"), now = performance.now();
-  if (!live) { setStatus("--", false, "骨格推定を準備中…"); return; }
+  if (!live) { setStatus(false, "骨格推定を準備中…"); return; }
   const pose = liveDetect(cam, now);
   const vw = cam.videoWidth, vh = cam.videoHeight, r = rectOf(cam, vw, vh);
   const g = fitCanvas($("camOv"));
@@ -571,16 +687,15 @@ function shootFrame() {
   drawLines(g, ref.lines || [], r);
   drawBones(g, toCanvas(ref.frames[ref.stance], r), COL.ref, 3, 0.55);
   if (pose) drawBones(g, toCanvas(pose, r), COL.you);
-  const c = coachStep(coach, { t: now / 1000, pose, ref, aspect: camAsp, refAspect: refAsp, front: $("facing").value === "user" });
-  const start = $("start").value;
-  setStatus(c.score ?? "--", c.display.startsWith("OK"), start === "handsUp" && c.ok ? "OK。両手を上げると録画するのだ" : c.display);
-  if (c.say) say(c.say);
-  if (handsUpStep(handsUp, now / 1000, pose, camAsp) && start === "handsUp") startRecording();
-  else if (c.ok && start === "aligned") startRecording();
+  const c = coachStep(coach, { t: now / 1000, pose, ref, aspect: camAsp, refAspect: refAsp, front: true });
+  // No number on screen: the small "✓ 角度OK" is the only verdict, and the words below say what to move.
+  setStatus(c.ok, c.ok ? "OK。両手を上げると録画するのだ" : c.display.replace(/（\d+）$/, ""));
+  if (handsUpStep(handsUp, now / 1000, pose, camAsp)) startRecording();
 }
 
-function setStatus(score, ok, text) {
-  $("score").textContent = score; $("score").classList.toggle("ok", ok); $("say").textContent = text;
+function setStatus(ok, text) {
+  $("angleOk").classList.toggle("on", ok);
+  $("say").textContent = text;
 }
 
 function startRecording() {
@@ -595,13 +710,11 @@ function startRecording() {
     const blob = new Blob(r.chunks, { type: r.mime }), name = clipName(r.mime, ref.id, r.date);
     saveClip(blob, name);                                       // every serve is kept for Drive, reviewed or not
     // The review holds the upload so a favourite tapped there still names the Drive file.
-    if ($("cont").checked) { closeFrames(r.frames); uploadClips(); }
-    else openReview(blob, r, name);
+    openReview(blob, r, name);
   };
   rec = r;
   recorder.start();
   $("rec").classList.add("on");
-  say("録画開始。サーブを打ってほしいのだ");
   $("say").textContent = "録画中。サーブを打ってほしいのだ";
 }
 
@@ -616,22 +729,16 @@ function stopRecording(discard = false) {
 async function saveClip(blob, name) {
   handsUp = createHandsUp();
   await addClip({ name, blob });
-  say("保存したのだ");
 }
 
 $("rec").onclick = () => (rec ? stopRecording() : startRecording());
-$("flip").onclick = () => {
-  if (rec) return;
-  $("facing").value = $("facing").value === "user" ? "environment" : "user";
-  store.set("facing", $("facing").value);
-  stopCamera(); startShoot(ref);
-};
 $("shootBack").onclick = () => leaveShoot();
 // The end of practice: one note for the day, kept as a .txt in the same Drive folder as the clips.
 $("finish").onclick = async () => {
   const memo = await askMemo("今日のメモ", "", "例：トスを前に出すのを意識した。打点はまだ後ろ");
   if (memo === null) return;                          // やめる: stay on the camera and keep practising
   if (memo) await addClip({ name: notesName(), blob: new Blob([memo], { type: "text/plain" }) });
+  if ($("review").classList.contains("on") && rv) closeReview();   // finishing from the review
   leaveShoot();
 };
 function leaveShoot() { shootLoop++; stopRecording(true); stopCamera(); show("home"); updateClips(); uploadClips(); }
@@ -660,8 +767,10 @@ async function openReview(blob, data, name) {
     toss: sv ? Math.max(0, data.times[stanceFrame(poses, sv.trophy)] - 0.5) : null };
   $("fav").textContent = "☆ お気に入り";
   $("rvMemo").textContent = "";
+  $("rvTime").textContent = "0:00";
+  $("rvBar").style.width = "0%";
   stepIdx = -1;
-  $("rvInfo").textContent = sv ? "トスが一番高い瞬間と打点でお手本に合わせてあるのだ" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
+  $("rvInfo").textContent = sv ? "" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
   show("review");
   const v = $("rv"); v.src = url; v.playbackRate = rv.toss !== null ? 1 : +$("rate").value;
   const refV = $("refV");
@@ -670,6 +779,7 @@ async function openReview(blob, data, name) {
     refV.load();
   }
   $("rvStage").classList.toggle("side", $("view").value === "side");
+  syncView();
   const id = ++rvLoop;
   v.onloadeddata = () => { drawReview(); everyFrame(v, () => id === rvLoop, drawReview); };
 }
@@ -680,6 +790,8 @@ function nearestIndex(t) {
   while (lo < hi) { const m = (lo + hi) >> 1; times[m] < t ? (lo = m + 1) : (hi = m); }
   return lo;
 }
+
+const clock = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
 function drawReview() {
   const v = $("rv"), g = fitCanvas($("rvOv"));
@@ -695,10 +807,13 @@ function drawReview() {
   if (still) g.drawImage(still, r.x, r.y, r.w, r.h);
   const i = still ? stepIdx : nearestIndex(v.currentTime);
   const t = still ? rv.times[i] : v.currentTime;
+  // The time and the thin timeline at the top and bottom of the review.
+  $("rvTime").textContent = clock(t);
+  $("rvBar").style.width = `${Math.min(100, (t / (isFinite(v.duration) && v.duration > 0 ? v.duration : 1)) * 100)}%`;
   const you = rv.poses[i];
   if (you) drawBones(g, toCanvas(you, r), COL.you);
   if (!rv.you) return;
-  const fi = warp(t + +$("offset").value, rv.you, ref);
+  const fi = warp(t, rv.you, ref);
   const rp = lerpPose(ref.frames, fi);
 
   // Sync reference video
@@ -780,7 +895,15 @@ $("rate").onchange = () => {
   const rate = rv?.toss !== null && v.currentTime < rv.toss ? 1 : +$("rate").value;
   if (v.playbackRate !== rate) v.playbackRate = rate;
 };
-$("view").onchange = $("offset").oninput = () => drawReview();
+$("view").onchange = () => drawReview();
+// 重ねる／並べる: the segmented control at the top of the review drives the select the rest of the code uses.
+const syncView = () => { for (const b of $("viewSeg").children) b.classList.toggle("on", b.dataset.view === $("view").value); };
+$("viewSeg").onclick = e => {
+  const b = e.target.closest("[data-view]");
+  if (!b || b.dataset.view === $("view").value) return;
+  $("view").value = b.dataset.view;
+  syncView(); drawReview();
+};
 function clipName(mime, refId, d) {
   return `serve_${refId}_${stamp(d)}.${mime.includes("mp4") ? "mp4" : "webm"}`;
 }
@@ -849,23 +972,14 @@ $("fav").onclick = async () => {
 
 const closeReview = () => { rvLoop++; $("refV")?.pause(); URL.revokeObjectURL(rv.url); closeFrames(rv.frames); rv.frames = []; stepIdx = -1; uploadClips(); };
 $("again").onclick = () => { closeReview(); startShoot(ref); };
-$("reviewBack").onclick = () => { closeReview(); stopCamera(); show("home"); };
 
-// ---------- settings + start ----------
-$("voice").checked = store.get("voice", true); $("voice").onchange = () => store.set("voice", $("voice").checked);
-$("cont").checked = store.get("cont", false); $("cont").onchange = () => store.set("cont", $("cont").checked);
-$("start").value = store.get("start", "handsUp");
-if (!$("start").value) $("start").value = "handsUp";      // a stored choice that no longer exists ("wave")
-$("start").onchange = () => store.set("start", $("start").value);
-$("model").value = store.get("model", "lite");
-$("facing").value = store.get("facing", "environment");
-$("facing").onchange = () => store.set("facing", $("facing").value);
-$("model").onchange = () => { store.set("model", $("model").value); live?.close(); live = null; };
-
+// ---------- start ----------
+// Fixed: front camera, accurate (full) model, no voice, recording starts on hands-up, always review.
 const builtIn = await fetch("refs.json").then(r => r.json()).then(d => d.refs);
 const onPc = await fetch("refs_user.json").then(r => r.json()).then(d => d.refs).catch(() => []);
 refs = [...builtIn, ...onPc, ...store.get("userRefs", [])];
-renderHome();
+renderEyes();
+renderSheet();
 watchRefs();
 uploadClips();
 
