@@ -32,7 +32,14 @@ const app = readFileSync(root + "/app.js", "utf8");
 const call = /poseFrames\([^;]*?\}\)/.exec(app)?.[0] ?? app.slice(app.indexOf("poseFrames("), app.indexOf("poseFrames(") + 600);
 check("poseFrames gets paused: with the recording state", /paused:\s*\(\)\s*=>[^,\n]*rec/.test(app), call.slice(0, 200));
 
-// 5. Finishing the estimation does not switch screens by itself.
+// 5. Every element the script asks for is in the page (a merge can leave the two out of step).
+const html = readFileSync(root + "/index.html", "utf8");
+const haveIds = new Set([...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
+const usedIds = new Set([...app.matchAll(/\$\("([^"]+)"\)/g)].map(m => m[1]));
+const missingIds = [...usedIds].filter(id => !haveIds.has(id));
+check("every $() id exists in index.html", missingIds.length === 0, missingIds.join(" "));
+
+// 6. Finishing the estimation does not switch screens by itself.
 const finished = /const serves = serveWindows\(doc\)[\s\S]{0,700}?\n\s*\}\s*catch/.exec(app)?.[0] ?? "";
 check("estimation does not jump to the check screen", finished.length > 0 && !/show\(\s*"confirm"\s*\)|openConfirm\(/.test(finished));
 

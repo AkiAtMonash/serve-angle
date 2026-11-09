@@ -3,7 +3,7 @@
 // cached anyway, so an offline "並べる" would fail quietly.
 //
 // Bump CACHE when the file list changes, so an old shell is dropped.
-const CACHE = "serve-angle-v1";
+const CACHE = "serve-angle-v2";
 const SHELL = [
   "./", "./index.html", "./app.js", "./clips.js", "./coach.js", "./serve.js", "./refjob.js",
   "./estimate.js", "./guide.js", "./drive-url.js", "./refs.json", "./manifest.webmanifest",

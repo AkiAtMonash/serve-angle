@@ -51,7 +51,7 @@
   #addBtn { padding:8px 12px; font-size:13px; }
   #addStatus, #clipInfo { color:var(--mut); font-size:13px; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  /* どちら�Eサーブにする�E�E*/
+  /* どちらのサーブにする？ */
   #choose { padding:14px 0 0; overflow:auto; }
   #choose h2 { margin:8px 18px 12px; font-size:18px; }
   #chList { display:flex; flex-direction:column; gap:10px; padding:0 16px 20px; }
@@ -126,20 +126,20 @@
   <div class="caption">撮る角度を選ぶ</div>
   <div id="courtWrap">
     <svg id="court" viewBox="0 0 320 444" preserveAspectRatio="xMidYMid meet" role="img" aria-label="コートを上から見た角度選び">
-      <!-- コート半面: ネットが上、�Eースラインが丁E-->
+      <!-- コート半面: ネットが上、ベースラインが下 -->
       <rect class="court" x="50" y="60" width="220" height="260" rx="6"/>
       <line class="cl" x1="64" y1="60" x2="64" y2="320"/>
       <line class="cl" x1="256" y1="60" x2="256" y2="320"/>
       <line class="cl" x1="64" y1="190" x2="256" y2="190"/>
       <line class="cl" x1="160" y1="60" x2="160" y2="190"/>
       <line class="cl" x1="160" y1="320" x2="160" y2="332"/>
-      <!-- ネッチE-->
+      <!-- ネット -->
       <line class="net" x1="42" y1="60" x2="278" y2="60"/>
       <line class="post" x1="42" y1="50" x2="42" y2="70"/>
       <line class="post" x1="278" y1="50" x2="278" y2="70"/>
       <!-- カメラの軌道 -->
       <circle class="orbit" cx="185" cy="300" r="105"/>
-      <!-- サーバ�E�E�デュース側のベ�Eスライン�E�E-->
+      <!-- サーバー（デュース側のベースライン） -->
       <g transform="translate(185,300)">
         <ellipse cx="0" cy="9" rx="13" ry="8" fill="#f2f2f2" opacity=".85"/>
         <circle cx="0" cy="0" r="7" fill="#f2f2f2"/>
@@ -154,7 +154,7 @@
   </div>
   <div id="sheet"></div>
   <div class="foot">
-    <button id="addBtn">�E�Eお手本を動画から追加</button>
+    <button id="addBtn">＋ お手本を動画から追加</button>
     <input id="addFile" type="file" accept="video/*" hidden>
     <span id="addStatus"></span>
     <button id="sendBtn" hidden>Driveへ送る</button>
@@ -163,8 +163,8 @@
 </section>
 
 <section id="choose" class="screen">
-  <div><button id="chBack" class="chip">‹ 戻めE/button></div>
-  <h2>どちら�Eサーブにする�E�E/h2>
+  <div><button id="chBack" class="chip">‹ 戻る</button></div>
+  <h2>どちらのサーブにする？</h2>
   <div id="chList"></div>
 </section>
 
@@ -173,12 +173,12 @@
     <video id="cam" playsinline muted></video>
     <canvas id="camOv"></canvas>
     <div class="hud top">
-      <span id="angleOk" class="angleok">✁E角度OK</span>
+      <span id="angleOk" class="angleok">✓ 角度OK</span>
     </div>
     <div id="warn"></div>
     <div id="say">起動中…</div>
     <div class="hud bottom">
-      <button id="shootBack" aria-label="めE��めE>✁E/button>
+      <button id="shootBack" aria-label="やめる">✕</button>
       <button id="rec" aria-label="録画"></button>
       <span id="recInfo"></span>
     </div>
@@ -191,24 +191,24 @@
     <video id="refV" playsinline muted preload="auto"></video>
     <canvas id="rvOv"></canvas>
     <div class="hud top">
-      <button id="finish" class="chip">練習を終えめE/button>
+      <button id="finish" class="chip">練習を終える</button>
       <div class="seg" id="viewSeg">
-        <button data-view="overlay" class="on">重�EめE/button>
-        <button data-view="side">並べめE/button>
+        <button data-view="overlay" class="on">重ねる</button>
+        <button data-view="side">並べる</button>
       </div>
       <span id="rvTime" class="chip">0:00</span>
-      <select id="view" hidden><option value="overlay">重�EめE/option><option value="side">並べめE/option></select>
+      <select id="view" hidden><option value="overlay">重ねる</option><option value="side">並べる</option></select>
     </div>
   </div>
   <div class="scrub"><div class="bar"><i id="rvBar"></i></div></div>
   <div class="controls">
     <div class="row">
-      <button id="back" class="step" aria-label="コマ戻ぁE>◀</button>
+      <button id="back" class="step" aria-label="コマ戻し">◀</button>
       <button id="play">再生</button>
       <button id="fwd" class="step" aria-label="コマ送り">▶</button>
-      <select id="rate"><option value="0.25">1/4倁E/option><option value="0.125">1/8倁E/option><option value="0.5">1/2倁E/option><option value="1">等倁E/option></select>
-      <button id="fav">☁Eお気に入めE/button>
-      <button id="again" class="primary">次を撮めE/button>
+      <select id="rate"><option value="0.25">1/4倍</option><option value="0.125">1/8倍</option><option value="0.5">1/2倍</option><option value="1">等倍</option></select>
+      <button id="fav">☆ お気に入り</button>
+      <button id="again" class="primary">次を撮る</button>
     </div>
     <div class="row">
       <span id="rvInfo" class="legend"></span>
@@ -222,17 +222,17 @@
     <video id="cfV" playsinline muted preload="auto"></video>
     <canvas id="cfOv"></canvas>
     <div class="hud top">
-      <button id="cfBack">ↁE/button>
+      <button id="cfBack">←</button>
       <span id="cfInfo" class="legend"></span>
     </div>
     <div class="hud bottom row" style="justify-content:center">
       <span id="cfServes" class="row"></span>
-      <button id="cfPrev" class="step" aria-label="コマ戻ぁE>◀</button>
+      <button id="cfPrev" class="step" aria-label="コマ戻し">◀</button>
       <button id="cfPlayBtn" class="primary">再生</button>
       <button id="cfNext" class="step" aria-label="コマ送り">▶</button>
-      <select id="cfRate"><option value="0.25">1/4倁E/option><option value="0.125">1/8倁E/option><option value="0.5">1/2倁E/option><option value="1">等倁E/option></select>
-      <button id="cfComment">コメンチE/button>
-      <button id="cfSave" class="primary">こ�E区間をお手本にする</button>
+      <select id="cfRate"><option value="0.25">1/4倍</option><option value="0.125">1/8倍</option><option value="0.5">1/2倍</option><option value="1">等倍</option></select>
+      <button id="cfComment">コメント</button>
+      <button id="cfSave" class="primary">この区間をお手本にする</button>
     </div>
   </div>
 </section>
@@ -242,19 +242,19 @@
     <h2 id="memoTitle"></h2>
     <textarea id="memoText"></textarea>
     <div class="row">
-      <button id="memoCancel">めE��めE/button>
-      <button id="memoOk" class="primary">保孁E/button>
+      <button id="memoCancel">やめる</button>
+      <button id="memoOk" class="primary">保存</button>
     </div>
   </div>
 </div>
 
 <div id="anglePick">
   <div class="box">
-    <h2>どの角度から撮った動画�E�E/h2>
+    <h2>どの角度から撮った動画？</h2>
     <div id="apList"></div>
     <div class="row">
-      <button id="apCancel">めE��めE/button>
-      <button id="apOk" class="primary">こ�E角度で保孁E/button>
+      <button id="apCancel">やめる</button>
+      <button id="apOk" class="primary">この角度で保存</button>
     </div>
   </div>
 </div>
@@ -262,9 +262,9 @@
 <div id="fig">
   <canvas id="figCv"></canvas>
   <span id="figNote"></span>
-  <button id="figClose" class="primary">閉じめE/button>
+  <button id="figClose" class="primary">閉じる</button>
 </div>
 
-<script type="module" src="app.js?v=21"></script>
+<script type="module" src="app.js?v=22"></script>
 </body>
 </html>

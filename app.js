@@ -2,7 +2,7 @@ import { createCoach, createHandsUp, handsUpStep, step as coachStep } from "./co
 import { findServes, fixSwaps, skipRaise, stanceFrame, warp } from "./serve.js";
 import { reference, serveWindows, videoTime } from "./refjob.js";
 import { poseFrames } from "./estimate.js";
-import { addClip, allClips, dropClip, favName, figName, memoName, notesName, setFav, setFig, stamp, putRef, allRefs, dropRef } from "./clips.js?v=21";
+import { addClip, allClips, dropClip, favName, figName, memoName, notesName, setFav, setFig, stamp, putRef, allRefs, dropRef } from "./clips.js?v=22";
 import { DRIVE_URL } from "./drive-url.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1";
@@ -237,7 +237,7 @@ async function landmarkers() {
 async function stillLandmarker() {
   await landmarkers();
   if (!still) {
-    const opts = { baseOptions: { modelAssetPath: MODEL($("model").value), delegate: "GPU" }, runningMode: "IMAGE", numPoses: 1 };
+    const opts = { baseOptions: { modelAssetPath: MODEL("full"), delegate: "GPU" }, runningMode: "IMAGE", numPoses: 1 };
     try { still = await Pose.createFromOptions(vision, opts); }
     catch { still = await Pose.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "CPU" } }); }
   }
