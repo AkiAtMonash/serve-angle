@@ -36,7 +36,7 @@ test("waits for the screen instead of stopping, then carries on from the same fr
   const waited = new Promise(r => { said = r; });
   const video = new FakeVideo({ duration: 0.1, blocked: () => hidden });
   const run = poseFrames(video, v => [v.currentTime], {
-    ...opts, hidden: () => hidden, onWait: () => said(),
+    ...opts, paused: () => hidden, onWait: () => said(),
   });
   try {
     await waited;                                  // it told the user it is waiting, not silently frozen
@@ -52,4 +52,18 @@ test("waits for the screen instead of stopping, then carries on from the same fr
 test("a frame the decoder never gives up becomes a gap, not the end of the run", async () => {
   const frames = await poseFrames(new FakeVideo({ duration: 0.1, blocked: () => true }), v => [v.currentTime], opts);
   assert.deepEqual(frames, [null, null, null]);
+});
+
+// The phone is busy with something else (recording a serve, screen off). Nothing is estimated while
+// it is busy, and the run picks up the same frame when it is free again.
+test("waits while paused, then carries on from the same frame", { timeout: 5000 }, async () => {
+  let paused = true;
+  const video = new FakeVideo({ duration: 0.1, blocked: () => paused });
+  const run = poseFrames(video, v => [v.currentTime], { ...opts, paused: () => paused });
+  // While paused it must never finish, however long the wait.
+  const first = await Promise.race([run.then(() => "done"), new Promise(r => setTimeout(() => r("waiting"), 1000))]);
+  assert.equal(first, "waiting");
+  paused = false;
+  const frames = await run;
+  assert.deepEqual(frames.flat(), [0, 1 / 30, 2 / 30]);
 });

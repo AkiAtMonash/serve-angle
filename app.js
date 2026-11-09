@@ -267,6 +267,7 @@ const angleName = deg => ANGLES.find(a => a.deg === deg)?.name ?? "";
 
 let pick = {};          // { az }: the angle chosen on the court, { az, ref }: the serve chosen at that angle
 let addAz = null;       // the angle a reference video was added from (pre-selected in the picker)
+let addJob = null;      // a finished estimation, kept until the status is tapped to check it
 
 function thumb(cv, r) {
   const g = cv.getContext("2d"); cv.width = 320; cv.height = 180;
@@ -381,7 +382,9 @@ $("addFile").onchange = async e => {
   const file = e.target.files[0]; e.target.value = "";
   if (!file) return;
   const st = $("addStatus"), video = URL.createObjectURL(file);
-  // A hidden page stops decoding the video, and the estimation with it: keep the screen on.
+  if (addJob) { URL.revokeObjectURL(addJob.video); addJob = null; }
+  // A hidden page stops decoding the video, and the estimation with it: keep the screen on. Recording
+  // a serve pauses the estimation too (paused below), so the camera gets the phone to itself.
   const wake = await navigator.wakeLock?.request("screen").catch(() => null);
   try {
     st.textContent = "骨格推定を準備中…";
@@ -392,15 +395,23 @@ $("addFile").onchange = async e => {
     const doc = { fps: 30, width: v.videoWidth, height: v.videoHeight };
     doc.frames = await poseFrames(v, src => detect(lm, src), {
       fps: 30,
+      paused: () => document.hidden || rec !== null,
       onProgress: p => { st.textContent = `骨格推定中… ${Math.round(p * 100)}%（画面を消さないでほしいのだ）`; },
-      onWait: () => { st.textContent = "画面が消えて止まっているのだ。画面を点けると続きから進むのだ"; },
+      onWait: () => { st.textContent = "画面を消したか録画中なので待っている。戻ると続きから進むのだ"; },
     });
     const serves = serveWindows(doc);
     if (!serves.length) throw new Error("サーブが見つからなかったのだ。1本のサーブが全身で映っている動画にしてほしいのだ");
-    st.textContent = "";
-    openConfirm({ doc, serves, video, blob: file });
+    addJob = { doc, serves, video, blob: file };
+    st.textContent = "お手本の準備ができたのだ（押して確認）";
   } catch (err) { st.textContent = String(err.message || err); URL.revokeObjectURL(video); }
   finally { wake?.release?.(); }
+};
+
+// The estimation waits here instead of jumping to the check screen: tapping the status opens it.
+$("addStatus").onclick = () => {
+  if (!addJob) return;
+  const job = addJob; addJob = null;
+  openConfirm(job);
 };
 
 // ---------- check screen: does the skeleton match the video? ----------
@@ -500,7 +511,7 @@ $("cfV").onclick = () => {
   v.paused ? (v.play().catch(() => {}), $("cfPlayBtn").textContent = "一時停止", $("cfInfo").textContent = cf.info)
            : (v.pause(), $("cfPlayBtn").textContent = "再生");
 };
-$("cfBack").onclick = () => { closeConfirm(); show("home"); };
+$("cfBack").onclick = () => { closeConfirm(); addJob = null; $("addStatus").textContent = ""; show("home"); };
 
 // One tap = one frame, holding keeps stepping. A lagging skeleton only shows when the frame stops.
 function cfStepFrame(dir) {
