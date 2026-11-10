@@ -776,7 +776,7 @@ async function openReview(blob, data, name) {
   $("fav").textContent = "☆ お気に入り";
   $("rvMemo").textContent = "";
   $("rvTime").textContent = "0:00";
-  $("rvBar").style.width = "0%";
+  setBar(0);
   stepIdx = -1;
   $("rvInfo").textContent = sv ? "" : "サーブを見つけられなかったので、お手本は重ねていないのだ";
   show("review");
@@ -799,6 +799,18 @@ function nearestIndex(t) {
   return lo;
 }
 
+// A recorded clip often reports an Infinity duration until it is played through, so fall back to the
+// time of the last recorded frame.
+function rvDuration() {
+  const d = $("rv").duration;
+  return isFinite(d) && d > 0 ? d : Math.max(0.1, rv?.times?.at(-1) ?? 1);
+}
+function setBar(f) {
+  const pct = `${Math.max(0, Math.min(1, f || 0)) * 100}%`;
+  $("rvBar").style.width = pct;
+  $("rvKnob").style.left = pct;
+}
+
 const clock = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
 function drawReview() {
@@ -817,7 +829,7 @@ function drawReview() {
   const t = still ? rv.times[i] : v.currentTime;
   // The time and the thin timeline at the top and bottom of the review.
   $("rvTime").textContent = clock(t);
-  $("rvBar").style.width = `${Math.min(100, (t / (isFinite(v.duration) && v.duration > 0 ? v.duration : 1)) * 100)}%`;
+  setBar(t / rvDuration());
   const you = rv.poses[i];
   if (you) drawBones(g, toCanvas(you, r), COL.you);
   if (!rv.you) return;
@@ -896,6 +908,42 @@ function holdStep(button, fn) {
   button.onpointerup = button.onpointercancel = button.onpointerleave = () => clearTimeout(timer);
   button.oncontextmenu = e => e.preventDefault();               // long press must not open a menu on Android
 }
+// The timeline, like a video player's: tap to jump there, drag to scrub. While the finger is down the
+// review shows the frames cached while recording (no video seeks, so dragging stays smooth); on release a
+// clip that was playing carries on from there, a paused one stays on that frame.
+{
+  const bar = $("scrub");
+  let wasPlaying = false, dragging = false;
+  const scrubTo = e => {
+    if (!rv) return;
+    const box = bar.querySelector(".bar").getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (e.clientX - box.left) / box.width));
+    const t = f * rvDuration();
+    if (rv.frames.length) stepIdx = nearestIndex(t);
+    else $("rv").currentTime = t;
+    drawReview();
+  };
+  bar.onpointerdown = e => {
+    if (!rv) return;
+    const v = $("rv");
+    dragging = true; wasPlaying = !v.paused && !v.ended;
+    v.pause(); $("refV")?.pause();
+    bar.classList.add("drag");
+    try { bar.setPointerCapture(e.pointerId); } catch { /* capture only keeps the drag on the bar */ }
+    scrubTo(e);
+  };
+  bar.onpointermove = e => { if (dragging) scrubTo(e); };
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; bar.classList.remove("drag");
+    const v = $("rv");
+    if (stepIdx >= 0) v.currentTime = rv.times[stepIdx];
+    if (wasPlaying) { stepIdx = -1; $("play").onclick(); }
+    else $("play").textContent = "再生";
+  };
+  bar.onpointerup = bar.onpointercancel = end;
+}
+
 holdStep($("back"), () => stepFrame(-1));
 holdStep($("fwd"), () => stepFrame(1));
 $("rate").onchange = () => {
