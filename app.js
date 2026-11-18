@@ -129,7 +129,7 @@ async function makeFigure() {
   $("play").textContent = "再生";
   if (!rv.you) { $("rvMemo").textContent = "サーブが見つからなかったので、図は作れないのだ"; return; }
 
-  const youI = Math.min(rv.poses.length - 1, nearestIndex(rv.you.contact) + 1);
+  const youI = Math.min(rv.poses.length - 1, nearestIndex(youNow().contact));
   const proI = Math.min(ref.frames.length - 1, ref.impact ?? ref.contact);
   const youPose = rv.poses[youI], proPose = ref.frames[proI];
   if (!youPose || !proPose) return;
@@ -759,6 +759,11 @@ function stopCamera() {
 // ---------- review ----------
 let rv = null, rvLoop = 0;
 let stepIdx = -1;   // >= 0: the review shows cached frame stepIdx instead of the video
+// The racket wrist peaks a touch before the racket head meets the ball: on 2026-11-12 the detector gave
+// 6.57 s and 8.43 s, and the two clips showed contact at 6.60 s and a little after 8.43 s.
+const CONTACT_LATE = 1 / 30;   // one frame at the 30 fps the detector samples
+// The contact the review lines up on: the detected one, plus the 1-frame nudges made while watching.
+const youNow = () => (rv?.you ? { trophy: rv.you.trophy, contact: rv.hit0 + rv.hitNudge / rv.fps } : null);
 
 const closeFrames = frames => Promise.all(frames).then(bs => bs.forEach(b => b?.close()));
 
@@ -769,10 +774,15 @@ async function openReview(blob, data, name) {
   const fps = poses.length / Math.max(0.1, data.times.at(-1) ?? 1);
   const sv = findServes(skipRaise(poses), fps).at(-1);
   rv = { url, blob, poses, name, fav: false, memo: "", times: data.times, mime: data.mime, frames: await Promise.all(data.frames),
-    you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] } : null,
+    you: sv ? { trophy: data.times[sv.trophy], contact: data.times[sv.contact] + CONTACT_LATE } : null,
     // stanceFrame is the last frame with both hands below the shoulders, i.e. the toss has already
     // started; step back 0.5 s so the slow motion begins just as the hands come together.
     toss: sv ? Math.max(0, data.times[stanceFrame(poses, sv.trophy)] - 0.5) : null };
+  window.__rv = rv;   // testing on a PC: read the review state from the console
+  rv.hit0 = rv.you?.contact ?? 0;
+  rv.hitNudge = 0;
+  rv.fps = fps;
+  $("hitNudge").textContent = "打点 ±0";
   $("fav").textContent = "☆ お気に入り";
   $("rvMemo").textContent = "";
   $("rvTime").textContent = "0:00";
@@ -821,7 +831,10 @@ function drawReview() {
   const you = rv.poses[i];
   if (you) drawBones(g, toCanvas(you, r), COL.you);
   if (!rv.you) return;
-  const fi = warp(t, rv.you, ref);
+  // Line the pro's hand-picked impact up with your contact, not the automatically found frame.
+  const refHit = ref.impact ?? ref.contact;
+  const now = youNow();
+  const fi = warp(t, now, { trophy: ref.trophy, contact: refHit });
   const rp = lerpPose(ref.frames, fi);
 
   // Sync reference video
@@ -831,7 +844,7 @@ function drawReview() {
       if (!refV.paused) refV.pause();
       if (Math.abs(refV.currentTime - proTime) > 0.03) refV.currentTime = proTime;
     } else if (isSide) {
-      const k = (ref.contact - ref.trophy) / (rv.you.contact - rv.you.trophy);
+      const k = (refHit - ref.trophy) / (now.contact - rv.you.trophy);
       const prRate = Math.max(0.05, Math.min(4, v.playbackRate * (k * (ref.videoStep ?? 0.1))));
       if (refV.playbackRate !== prRate) refV.playbackRate = prRate;
       if (refV.paused) refV.play().catch(() => {});
@@ -871,6 +884,16 @@ $("play").onclick = () => {
   $("play").textContent = v.paused ? "再生" : "一時停止";
 };
 $("rv").onended = () => { $("play").textContent = "再生"; $("refV")?.pause(); };
+
+// Move the user's contact by one skeleton frame; the pro's impact stays where it was picked.
+function nudgeHit(dir) {
+  if (!rv?.you) return;
+  rv.hitNudge = Math.max(-60, Math.min(60, rv.hitNudge + dir));
+  $("hitNudge").textContent = `打点 ${rv.hitNudge > 0 ? "+" : ""}${rv.hitNudge}`;
+  drawReview();
+}
+$("hitBack").onclick = () => nudgeHit(-1);
+$("hitFwd").onclick = () => nudgeHit(1);
 
 // Frame stepping: draws the frames cached while recording, so there is no video seek
 // (a seek decodes from the last keyframe, up to ~100 frames back in Chrome's recordings).

@@ -202,6 +202,11 @@
   </div>
   <div class="scrub"><div class="bar"><i id="rvBar"></i></div></div>
   <div class="controls">
+    <div class="row" id="hitRow">
+      <button id="hitBack" class="step" aria-label="打点を1コマ戻す">打点 ◀</button>
+      <span id="hitNudge" class="legend">打点 ±0</span>
+      <button id="hitFwd" class="step" aria-label="打点を1コマ進める">打点 ▶</button>
+    </div>
     <div class="row">
       <button id="back" class="step" aria-label="コマ戻し">◀</button>
       <button id="play">再生</button>
@@ -265,6 +270,6 @@
   <button id="figClose" class="primary">閉じる</button>
 </div>
 
-<script type="module" src="app.js?v=22"></script>
+<script type="module" src="app.js?v=23"></script>
 </body>
 </html>
